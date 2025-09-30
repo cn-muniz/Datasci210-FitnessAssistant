@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Recipe Search (Qdrant)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --fg:#111; --muted:#555; --border:#eaeaea; --bg:#fff; --code:#f6f8fa;
+    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;max-width:960px;color:var(--fg);background:var(--bg)}
+    h1{margin:0 0 12px}
+    form, .filters{display:grid;gap:8px;grid-template-columns:repeat(6,1fr);align-items:end}
+    form .wide{grid-column:1 / -1}
+    label{font-size:12px;color:#444}
+    input,select,button{padding:8px;border:1px solid #ccc;border-radius:8px}
+    button{cursor:pointer;background:#111;color:#fff}
+    .result{border:1px solid var(--border);border-radius:12px;padding:12px;margin:12px 0}
+    .meta{color:var(--muted);font-size:13px;margin:4px 0 8px}
+    .payload{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;background:var(--code);border-radius:8px;padding:8px}
+    .row{display:flex;gap:8px;align-items:center}
+
+    /* Minimal Markdown styling */
+    .md-card h1,.md-card h2,.md-card h3{margin:0.3em 0}
+    .md-card h1{font-size:1.35rem}
+    .md-card h2{font-size:1.1rem}
+    .md-card h3{font-size:1rem}
+    .md-card p{margin:0.4em 0 0.6em}
+    .md-card ul{margin:0.4em 0 0.6em 1.2em}
+    .md-card ol{margin:0.4em 0 0.6em 1.2em}
+    .md-card code{background:var(--code);padding:0.1em 0.3em;border-radius:4px}
+    .md-card hr{border:none;border-top:1px solid var(--border);margin:0.8em 0}
+  </style>
+  <!-- Markdown renderer + sanitizer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <h1>Recipe Search</h1>
+  <form id="search-form">
+    <div class="wide">
+      <label>Query</label>
+      <input id="q" type="text" placeholder="e.g., mediterranean main, lemon garlicky, ~650 kcal ~40g protein" required />
+    </div>
+    <div>
+      <label>Cal min</label>
+      <input id="cal_min" type="number" step="1" />
+    </div>
+    <div>
+      <label>Cal max</label>
+      <input id="cal_max" type="number" step="1" />
+    </div>
+    <div>
+      <label>Min protein (g)</label>
+      <input id="min_protein" type="number" step="1" />
+    </div>
+    <div>
+      <label>Cuisine</label>
+      <input id="cuisine" type="text" placeholder="thai / mediterranean / global" />
+    </div>
+    <div>
+      <label>Diet tag</label>
+      <input id="diet" type="text" placeholder="vegetarian / high-protein / keto" />
+    </div>
+    <div>
+      <label>Top K</label>
+      <input id="limit" type="number" value="5" min="1" max="50" />
+    </div>
+    <div class="row">
+      <input id="hybrid" type="checkbox" />
+      <label for="hybrid">Hybrid (dense + sparse)</label>
+    </div>
+    <div>
+      <button type="submit">Search</button>
+    </div>
+  </form>
+
+  <div id="status" class="meta"></div>
+  <div id="results"></div>
+
+  <script>
+    const form = document.getElementById('search-form');
+    const statusEl = document.getElementById('status');
+    const resultsEl = document.getElementById('results');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      resultsEl.innerHTML = '';
+      statusEl.textContent = 'Searching...';
+
+      const payload = {
+        query: document.getElementById('q').value.trim(),
+        limit: parseInt(document.getElementById('limit').value || '5', 10),
+        cal_min: numOrNull(document.getElementById('cal_min').value),
+        cal_max: numOrNull(document.getElementById('cal_max').value),
+        min_protein: numOrNull(document.getElementById('min_protein').value),
+        cuisine: emptyToNull(document.getElementById('cuisine').value),
+        diet: emptyToNull(document.getElementById('diet').value),
+        hybrid: document.getElementById('hybrid').checked,
+      };
+
+      try {
+        const resp = await fetch('/search', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        statusEl.textContent = `Found ${data.count} result(s) — hybrid used: ${data.hybrid_used}`;
+        renderResults(data.results || []);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = 'Error querying server — check console';
+      }
+    });
+
+    function numOrNull(v){ const x = parseFloat(v); return isNaN(x) ? null : x; }
+    function emptyToNull(v){ v = (v||'').trim(); return v.length ? v : null; }
+
+    function renderResults(items){
+      if(!items.length){ resultsEl.textContent = 'No results.'; return; }
+      for(const p of items){
+        const mac = p.macros_per_serving || {};
+        const div = document.createElement('div');
+        div.className = 'result';
+
+        // Markdown card (full)
+        const md = p.search_card_full_md || '';
+        const mdHTML = DOMPurify.sanitize(marked.parse(md));
+
+        div.innerHTML = `
+          <div class="md-card">${mdHTML}</div>
+          <div class="meta">
+            cuisines=${JSON.stringify(p.cuisines||[])} |
+            course=${JSON.stringify(p.course||null)} |
+            methods=${JSON.stringify(p.methods||[])} |
+            diet=${JSON.stringify(p.diet_tags||[])} |
+            min_servings=${JSON.stringify(p.servings_min||1)} |
+            max_servings=${JSON.stringify(p.servings_max||1)} |
+            avg_servings=${JSON.stringify(p.servings_avg)||1}
+          </div>
+          <div class="meta">
+            per-serving: ${Math.round(mac.cal||0)} kcal · ${(mac.protein_g||0).toFixed(1)}g protein · ${(mac.fat_g||0).toFixed(1)}g fat
+          </div>
+          <details>
+            <summary>Full payload (JSON)</summary>
+            <pre class="payload">${escapeHtml(JSON.stringify(p, null, 2))}</pre>
+          </details>
+        `;
+        resultsEl.appendChild(div);
+      }
+    }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, (m)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+    }
+  </script>
+</body>
+</html>

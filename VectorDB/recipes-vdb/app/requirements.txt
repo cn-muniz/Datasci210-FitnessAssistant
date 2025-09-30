@@ -1,0 +1,9 @@
+fastapi==0.115.2
+uvicorn[standard]==0.30.6
+qdrant-client==1.9.2
+sentence-transformers==3.0.1
+torch>=2.3,<2.6
+scikit-learn==1.5.1
+numpy
+tqdm
+requests==2.32.3
