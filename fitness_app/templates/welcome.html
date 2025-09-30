@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Welcome{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="app-header">
+        <div class="app-logo">F</div>
+        <div class="app-name">FitPlan</div>
+        <div class="app-tagline">Your all-in-one health companion</div>
+    </div>
+    
+    <div class="scrollable-content">
+        <form method="POST" action="{{ url_for('login') }}">
+            <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" name="email" class="form-input" placeholder="Enter your email" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-input" placeholder="Enter your password" required>
+            </div>
+            
+            <button type="submit" class="btn-primary">Log In</button>
+        </form>
+        
+        <a href="{{ url_for('signup') }}">
+            <button type="button" class="btn-secondary" style="width: 100%; margin-top: 10px;">Create Account</button>
+        </a>
+    </div>
+    
+    <div class="link-text">
+        <a href="#">Forgot password?</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

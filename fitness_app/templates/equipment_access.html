@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Equipment Access{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 83%"></div>
+    </div>
+    <div class="step-indicator">Step 5 of 6 • Equipment Access</div>
+    
+    <div class="scrollable-content">
+        <h3 style="font-size: 18px; margin-bottom: 10px; text-align: center;">What equipment do you have?</h3>
+        <p style="font-size: 14px; color: #666; text-align: center; margin-bottom: 25px;">Select all equipment you can access</p>
+        
+        <form method="POST" action="{{ url_for('save_equipment_access') }}" id="equipmentForm">
+            <div class="goal-options">
+                <label class="goal-option multi-select" for="no-equipment">
+                    <input type="checkbox" name="equipment" value="no-equipment" id="no-equipment">
+                    <div class="goal-icon">🏠</div>
+                    <div class="goal-text">
+                        <div class="goal-title">No Equipment</div>
+                        <div class="goal-desc">Bodyweight exercises only</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="dumbbells">
+                    <input type="checkbox" name="equipment" value="dumbbells" id="dumbbells">
+                    <div class="goal-icon">🏋️</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Dumbbells</div>
+                        <div class="goal-desc">Adjustable or fixed weight dumbbells</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="resistance-bands">
+                    <input type="checkbox" name="equipment" value="resistance-bands" id="resistance-bands">
+                    <div class="goal-icon">💪</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Resistance Bands</div>
+                        <div class="goal-desc">Elastic resistance bands</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="cardio-equipment">
+                    <input type="checkbox" name="equipment" value="cardio-equipment" id="cardio-equipment">
+                    <div class="goal-icon">🏃</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Cardio Equipment</div>
+                        <div class="goal-desc">Treadmill, bike, elliptical, etc.</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="full-gym">
+                    <input type="checkbox" name="equipment" value="full-gym" id="full-gym">
+                    <div class="goal-icon">🏢</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Full Gym Access</div>
+                        <div class="goal-desc">Complete gym with all equipment</div>
+                    </div>
+                </label>
+            </div>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('physical_limitations') }}">
+            <button type="button" class="btn-back">Back</button>
+        </a>
+        <button type="submit" form="equipmentForm" class="btn-next">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

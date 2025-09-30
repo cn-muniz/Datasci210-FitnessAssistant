@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Dashboard{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="app-header">
+        <div class="app-logo">F</div>
+        <div class="app-name">Welcome back, {{ user_name }}!</div>
+        <div class="app-tagline">Your personalized health plan</div>
+    </div>
+    
+    <div class="tab-navigation">
+        <div class="tab-option active" data-tab="workout">Workout</div>
+        <div class="tab-option" data-tab="meals">Meals</div>
+        <div class="tab-option" data-tab="grocery">Grocery</div>
+    </div>
+    
+    <div class="scrollable-content">
+        <!-- Workout Plan Tab -->
+        <div id="workout-tab" class="tab-content active">
+            {% if workout_plan %}
+                <div class="plan-header">
+                    <div class="app-name">Your Workout Plan</div>
+                    <div class="app-tagline">{{ workout_plan.week }} • Back-friendly</div>
+                </div>
+                
+                {% for day in workout_plan.days %}
+                    {% if day.exercises %}
+                        <div class="workout-day">
+                            <div class="workout-day-header">
+                                <div class="workout-day-title">{{ day.day }} - {{ day.title }}</div>
+                                <div class="workout-day-duration">{{ day.duration }}</div>
+                            </div>
+                            {% for exercise in day.exercises %}
+                                <div class="exercise-item">
+                                    <div class="exercise-name">{{ exercise.name }}</div>
+                                    <div class="exercise-details">{{ exercise.sets }}</div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <div class="workout-day rest">
+                            <div class="workout-day-header">
+                                <div class="workout-day-title">{{ day.day }} - {{ day.title }}</div>
+                                <div class="workout-day-duration">{{ day.duration }}</div>
+                            </div>
+                            <p style="font-size: 12px; color: #666; margin: 0;">{{ day.description }}</p>
+                        </div>
+                    {% endif %}
+                {% endfor %}
+                
+                <div class="alert-box">
+                    <p class="alert-text">💡 All exercises modified for your profile. Stop if you feel pain.</p>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    <p>No workout plan available. Please complete your profile first.</p>
+                </div>
+            {% endif %}
+        </div>
+        
+        <!-- Meals Tab -->
+        <div id="meals-tab" class="tab-content">
+            {% if first_day %}
+                <div class="plan-header">
+                    <div class="app-name">Your Meal Plan</div>
+                    <div class="app-tagline">{{ meal_plan.daily_calories or 'Custom' }} cal/day • Gluten-free</div>
+                </div>
+                
+                <h3 style="font-size: 14px; margin-bottom: 10px; text-align: center; color: #333;">
+                    Today, {{ first_day.date }}
+                </h3>
+                
+                {% for meal in first_day.meals %}
+                    <div class="meal-card">
+                        <div class="meal-header">
+                            <div class="meal-title">{{ meal.title }}</div>
+                            <div class="meal-calories">{{ meal.calories }} cal</div>
+                        </div>
+                        <div class="meal-description">{{ meal.description }}</div>
+                        <div class="macros">
+                            <span>P: {{ meal.macros.protein }}</span>
+                            <span>C: {{ meal.macros.carbs }}</span>
+                            <span>F: {{ meal.macros.fat }}</span>
+                        </div>
+                    </div>
+                {% endfor %}
+                
+                <div class="summary-box">
+                    <div class="summary-row">
+                        <span>Daily Total:</span>
+                        <span>{{ meal_plan.daily_calories or first_day.total_calories or 'N/A' }} calories</span>
+                    </div>
+                </div>
+                
+                {% if meal_plan and meal_plan.days and meal_plan.days|length > 1 %}
+                    <div style="text-align: center; margin-top: 15px;">
+                        <button class="btn-secondary" onclick="showFullWeekPlan()">View Full Week</button>
+                    </div>
+                {% endif %}
+                
+            {% else %}
+                <div class="empty-state">
+                    <p>No meal plan available. Please complete your profile first.</p>
+                </div>
+            {% endif %}
+        </div>        
+        <!-- Grocery Tab -->
+        <div id="grocery-tab" class="tab-content">
+            {% if grocery_list %}
+                <div class="plan-header">
+                    <div class="app-name">Shopping List</div>
+                    <div class="app-tagline">{{ grocery_list.week }} • Organized by aisle</div>
+                </div>
+                
+                {% for section in grocery_list.sections %}
+                    <div class="grocery-section">
+                        <div class="grocery-section-title">
+                            <span class="grocery-section-icon">{{ section.title.split(' ')[0] }}</span>
+                            {{ section.title.split(' ', 1)[1] }}
+                        </div>
+                        {% for item in section['items'] %}
+                            <div class="grocery-item">
+                                <div class="grocery-item-name">{{ item['name'] }}</div>
+                                <div class="grocery-item-quantity">{{ item['quantity'] }}</div>
+                                <div class="grocery-item-price">{{ item['price'] }}</div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endfor %}
+                
+                <div class="summary-box">
+                    <div class="summary-row">
+                        <span>Estimated total:</span>
+                        <span>{{ grocery_list.total }}</span>
+                    </div>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    <p>No grocery list available. Please complete your profile first.</p>
+                </div>
+            {% endif %}
+        </div>
+    
+</div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('logout') }}">
+            <button class="btn-secondary">Logout</button>
+        </a>
+        
+        {% if workout_plan or first_day or grocery_list %}
+            <!-- Plans are available - show Start Today button -->
+            <button class="btn-primary">Start Today</button>
+        {% else %}
+            <!-- No plans available - show Complete Profile button -->
+            <a href="{{ url_for('basic_info') }}" style="text-decoration: none;">
+                <button class="btn-primary">Complete Profile</button>
+            </a>
+        {% endif %}
+</div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/plans.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Physical Limitations{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 66%"></div>
+    </div>
+    <div class="step-indicator">Step 4 of 6 • Physical Limitations</div>
+    
+    <div class="scrollable-content">
+        <h3 style="font-size: 18px; margin-bottom: 10px; text-align: center;">Any injuries or limitations?</h3>
+        <p style="font-size: 14px; color: #666; text-align: center; margin-bottom: 25px;">We'll modify your workouts accordingly</p>
+        
+        <form method="POST" action="{{ url_for('save_physical_limitations') }}" id="limitationsForm">
+            <div class="goal-options">
+                <label class="goal-option multi-select" for="knee-issues">
+                    <input type="checkbox" name="physical_limitations" value="knee-issues" id="knee-issues">
+                    <div class="goal-icon">🦵</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Knee Issues</div>
+                        <div class="goal-desc">Current or past knee injuries</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="back-problems">
+                    <input type="checkbox" name="physical_limitations" value="back-problems" id="back-problems">
+                    <div class="goal-icon">🏃</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Back Problems</div>
+                        <div class="goal-desc">Lower or upper back pain/injury</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="shoulder-arm">
+                    <input type="checkbox" name="physical_limitations" value="shoulder-arm" id="shoulder-arm">
+                    <div class="goal-icon">💪</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Shoulder/Arm Issues</div>
+                        <div class="goal-desc">Shoulder, elbow, or wrist problems</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="heart-condition">
+                    <input type="checkbox" name="physical_limitations" value="heart-condition" id="heart-condition">
+                    <div class="goal-icon">❤️</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Heart Condition</div>
+                        <div class="goal-desc">Cardiovascular limitations</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="no-limitations">
+                    <input type="checkbox" name="physical_limitations" value="none" id="no-limitations">
+                    <div class="goal-icon">✅</div>
+                    <div class="goal-text">
+                        <div class="goal-title">None</div>
+                        <div class="goal-desc">No current injuries or limitations</div>
+                    </div>
+                </label>
+            </div>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('dietary_restrictions') }}">
+            <button type="button" class="btn-back">Back</button>
+        </a>
+        <button type="submit" form="limitationsForm" class="btn-next">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

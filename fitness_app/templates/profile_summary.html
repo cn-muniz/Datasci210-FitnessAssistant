@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Profile Summary{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 100%"></div>
+    </div>
+    <div class="step-indicator">Step 6 of 6 • Ready to create your plan!</div>
+    
+    <div class="scrollable-content">
+        <h3 style="font-size: 18px; margin-bottom: 20px; text-align: center;">Review Your Profile</h3>
+        
+        <div class="profile-summary">
+            <div class="profile-item">
+                <span class="profile-label">Name:</span>
+                <span class="profile-value">{{ user.name }}</span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Age:</span>
+                <span class="profile-value">{{ user.age }}, {{ user.gender|title }}</span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Height:</span>
+                <span class="profile-value">{{ user.height }}</span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Weight:</span>
+                <span class="profile-value">{{ user.weight }} lbs</span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Goal:</span>
+                <span class="profile-value">{{ user.fitness_goals|replace('-', ' ')|title }}</span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Restrictions:</span>
+                <span class="profile-value">
+                    {% if user.dietary_restrictions %}
+                        {% set restrictions = user.dietary_restrictions | fromjson %}
+                        {% if 'none' in restrictions %}
+                            None
+                        {% else %}
+                            {{ restrictions | join(', ') | replace('-', ' ') | title }}
+                        {% endif %}
+                    {% else %}
+                        Not specified
+                    {% endif %}
+                </span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Limitations:</span>
+                <span class="profile-value">
+                    {% if user.physical_limitations %}
+                        {% set limitations = user.physical_limitations | fromjson %}
+                        {% if 'none' in limitations %}
+                            None
+                        {% else %}
+                            {{ limitations | join(', ') | replace('-', ' ') | title }}
+                        {% endif %}
+                    {% else %}
+                        Not specified
+                    {% endif %}
+                </span>
+            </div>
+            <div class="profile-item">
+                <span class="profile-label">Equipment:</span>
+                <span class="profile-value">
+                    {% if user.available_equipment %}
+                        {% set equipment = user.available_equipment | fromjson %}
+                        {{ equipment | join(', ') | replace('-', ' ') | title }}
+                    {% else %}
+                        Not specified
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+        
+        <div style="text-align: center; margin-bottom: 20px;">
+            <p style="font-size: 14px; color: #666; line-height: 1.5;">
+                Based on your profile, we'll create personalized weekly workout plans, meal plans, and grocery lists tailored to your goals and preferences.
+            </p>
+        </div>
+        
+        <form method="POST" action="{{ url_for('create_plan') }}">
+            <button type="submit" class="btn-primary" style="width: 100%;">Create My Plan</button>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('equipment_access') }}">
+            <button type="button" class="btn-back">Edit Profile</button>
+        </a>
+    </div>
+</div>
+{% endblock %}

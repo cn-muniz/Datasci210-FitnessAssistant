@@ -1,0 +1,18 @@
+name: DATASCI210_flask
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - flask=2.3.3
+  - sqlite
+  - pip
+  - pip:
+    - python-dotenv
+  - numpy
+  - pandas  
+  - scikit-learn
+  # - openai
+  # - langchain
+  # - chromadb
+  # - sentence-transformers

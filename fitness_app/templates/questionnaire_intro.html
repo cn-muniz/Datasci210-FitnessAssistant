@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Let's Get Started{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 0%"></div>
+    </div>
+    
+    <div class="app-header">
+        <div class="app-logo">📋</div>
+        <div class="app-name">Let's Get Started</div>
+        <div class="app-tagline">Help us create your perfect plan</div>
+    </div>
+    
+    <div class="scrollable-content">
+        <div class="intro-content">
+            <p class="intro-description">
+                We'll ask you a few quick questions to personalize your fitness and nutrition plans. This takes about 2 minutes.
+            </p>
+            
+            <ul class="checklist">
+                <li>Basic information (age, gender, measurements)</li>
+                <li>Fitness goals and preferences</li>
+                <li>Dietary restrictions and preferences</li>
+                <li>Available equipment and schedule</li>
+            </ul>
+        </div>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('basic_info') }}">
+            <button class="btn-primary" style="width: 100%;">Start Questionnaire</button>
+        </a>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Fitness Goals{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 33%"></div>
+    </div>
+    <div class="step-indicator">Step 2 of 6 • Fitness Goals</div>
+    
+    <div class="scrollable-content">
+        <h3 style="font-size: 18px; margin-bottom: 10px; text-align: center;">What's your primary fitness goal?</h3>
+        <p style="font-size: 14px; color: #666; text-align: center; margin-bottom: 25px;">Choose the goal that matters most to you</p>
+        
+        <form method="POST" action="{{ url_for('save_fitness_goals') }}" id="fitnessGoalsForm">
+            <div class="goal-options">
+                <label class="goal-option" for="weight-loss">
+                    <input type="radio" name="fitness_goal" value="weight-loss" id="weight-loss" required>
+                    <div class="goal-icon">⚖️</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Weight Loss</div>
+                        <div class="goal-desc">Lose weight and burn fat</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option" for="strength">
+                    <input type="radio" name="fitness_goal" value="strength" id="strength">
+                    <div class="goal-icon">💪</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Strength</div>
+                        <div class="goal-desc">Get stronger and more powerful</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option" for="muscle-building">
+                    <input type="radio" name="fitness_goal" value="muscle-building" id="muscle-building">
+                    <div class="goal-icon">🏗️</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Muscle Building</div>
+                        <div class="goal-desc">Build lean muscle mass</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option" for="endurance">
+                    <input type="radio" name="fitness_goal" value="endurance" id="endurance">
+                    <div class="goal-icon">🏃</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Endurance</div>
+                        <div class="goal-desc">Improve cardiovascular fitness</div>
+                    </div>
+                </label>
+            </div>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('basic_info') }}">
+            <button type="button" class="btn-back">Back</button>
+        </a>
+        <button type="submit" form="fitnessGoalsForm" class="btn-next">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

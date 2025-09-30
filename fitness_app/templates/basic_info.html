@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Basic Information{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 16%"></div>
+    </div>
+    <div class="step-indicator">Step 1 of 6 • Basic Information</div>
+    
+    <div class="scrollable-content">
+        <form method="POST" action="{{ url_for('save_basic_info') }}" id="basicInfoForm">
+            <div class="form-group">
+                <label class="form-label">Gender</label>
+                <select name="gender" class="form-input form-select" required>
+                    <option value="">Select gender</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="non-binary">Non-binary</option>
+                    <option value="prefer-not-to-say">Prefer not to say</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Age</label>
+                <input type="number" name="age" class="form-input" placeholder="Enter your age" min="13" max="120" required>
+            </div>
+            
+            <div class="input-row">
+                <div class="form-group">
+                    <label class="form-label">Height</label>
+                    <input type="text" name="height" class="form-input" placeholder="5'8&quot;" required>
+                    <div class="unit-selector">
+                        <button type="button" class="unit-option active" data-unit="ft">ft/in</button>
+                        <button type="button" class="unit-option" data-unit="cm">cm</button>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Weight</label>
+                    <input type="number" name="weight" class="form-input" placeholder="150" min="50" max="500" required>
+                    <div class="unit-selector">
+                        <button type="button" class="unit-option active" data-unit="lbs">lbs</button>
+                        <button type="button" class="unit-option" data-unit="kg">kg</button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('questionnaire_intro') }}">
+            <button type="button" class="btn-back">Back</button>
+        </a>
+        <button type="submit" form="basicInfoForm" class="btn-next">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

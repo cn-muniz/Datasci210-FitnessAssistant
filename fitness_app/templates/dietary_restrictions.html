@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}FitPlan - Dietary Restrictions{% endblock %}
+
+{% block content %}
+<div class="phone-frame">
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 50%"></div>
+    </div>
+    <div class="step-indicator">Step 3 of 6 • Dietary Restrictions</div>
+    
+    <div class="scrollable-content">
+        <h3 style="font-size: 18px; margin-bottom: 10px; text-align: center;">Any dietary restrictions?</h3>
+        <p style="font-size: 14px; color: #666; text-align: center; margin-bottom: 25px;">Select all that apply to you</p>
+        
+        <form method="POST" action="{{ url_for('save_dietary_restrictions') }}" id="dietaryForm">
+            <div class="goal-options">
+                <label class="goal-option multi-select" for="vegetarian">
+                    <input type="checkbox" name="dietary_restrictions" value="vegetarian" id="vegetarian">
+                    <div class="goal-icon">🥗</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Vegetarian</div>
+                        <div class="goal-desc">No meat, but includes dairy and eggs</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="gluten-free">
+                    <input type="checkbox" name="dietary_restrictions" value="gluten-free" id="gluten-free">
+                    <div class="goal-icon">🌱</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Gluten-Free</div>
+                        <div class="goal-desc">No wheat, barley, rye, or gluten</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="lactose-free">
+                    <input type="checkbox" name="dietary_restrictions" value="lactose-free" id="lactose-free">
+                    <div class="goal-icon">🥛</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Lactose-Free</div>
+                        <div class="goal-desc">No dairy products</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="nut-allergy">
+                    <input type="checkbox" name="dietary_restrictions" value="nut-allergy" id="nut-allergy">
+                    <div class="goal-icon">🥜</div>
+                    <div class="goal-text">
+                        <div class="goal-title">Nut Allergy</div>
+                        <div class="goal-desc">No nuts or nut-based products</div>
+                    </div>
+                </label>
+                
+                <label class="goal-option multi-select" for="none">
+                    <input type="checkbox" name="dietary_restrictions" value="none" id="none">
+                    <div class="goal-icon">✅</div>
+                    <div class="goal-text">
+                        <div class="goal-title">None</div>
+                        <div class="goal-desc">No dietary restrictions</div>
+                    </div>
+                </label>
+            </div>
+        </form>
+    </div>
+    
+    <div class="navigation">
+        <a href="{{ url_for('fitness_goals') }}">
+            <button type="button" class="btn-back">Back</button>
+        </a>
+        <button type="submit" form="dietaryForm" class="btn-next">Next</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{{ url_for('static', filename='js/forms.js') }}"></script>
+{% endblock %}

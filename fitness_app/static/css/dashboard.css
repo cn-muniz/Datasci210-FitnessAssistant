@@ -1,0 +1,330 @@
+/* Dashboard specific styles */
+.plan-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.plan-header .app-name {
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+    margin-bottom: 3px;
+}
+
+.plan-header .app-tagline {
+    font-size: 12px;
+    color: #666;
+}
+
+/* Tab content */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #666;
+}
+
+.empty-state p {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* Workout specific styles */
+.workout-day {
+    background: #f8f9ff;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 12px;
+    border-left: 4px solid #667eea;
+}
+
+.workout-day.rest {
+    border-left-color: #52c41a;
+    background: #f8fff8;
+}
+
+.workout-day-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.workout-day-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+}
+
+.workout-day-duration {
+    font-size: 11px;
+    color: #666;
+    background: #e8f2ff;
+    padding: 3px 6px;
+    border-radius: 12px;
+}
+
+.workout-day.rest .workout-day-duration {
+    background: #f6ffed;
+}
+
+.exercise-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid #e1e8ed;
+}
+
+.exercise-item:last-child {
+    border-bottom: none;
+}
+
+.exercise-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: #333;
+}
+
+.exercise-details {
+    font-size: 11px;
+    color: #667eea;
+    font-weight: 600;
+}
+
+/* Meal specific styles */
+.meal-card {
+    background: #f8fff8;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 12px;
+    border-left: 4px solid #52c41a;
+}
+
+.meal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.meal-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+}
+
+.meal-calories {
+    font-size: 11px;
+    color: #666;
+    background: #f6ffed;
+    padding: 3px 6px;
+    border-radius: 12px;
+}
+
+.meal-description {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.macros {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: #666;
+}
+
+/* Grocery specific styles */
+.grocery-section {
+    margin-bottom: 15px;
+}
+
+.grocery-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+}
+
+.grocery-section-icon {
+    margin-right: 6px;
+    font-size: 16px;
+}
+
+.grocery-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: #fafbfc;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    border-left: 3px solid #e1e8ed;
+}
+
+.grocery-item:hover {
+    background: #f0f2f5;
+    cursor: pointer;
+}
+
+.grocery-item.checked {
+    background: #f6ffed;
+    border-left-color: #52c41a;
+    opacity: 0.7;
+}
+
+.grocery-item.checked .grocery-item-name {
+    text-decoration: line-through;
+}
+
+.grocery-item-name {
+    font-size: 12px;
+    color: #333;
+    flex: 1;
+}
+
+.grocery-item-quantity {
+    font-size: 11px;
+    color: #666;
+    font-weight: 500;
+    margin: 0 8px;
+}
+
+.grocery-item-price {
+    font-size: 10px;
+    color: #52c41a;
+    font-weight: 600;
+}
+
+/* Summary box */
+.summary-box {
+    background: #e8f5e8;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 15px;
+}
+
+.summary-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #2d5a2d;
+    margin-bottom: 4px;
+}
+
+.summary-row:last-child {
+    margin-bottom: 0;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+/* Alert box */
+.alert-box {
+    background: #fff3cd;
+    border-radius: 8px;
+    padding: 10px;
+    margin: 15px 0;
+}
+
+.alert-text {
+    font-size: 11px;
+    color: #856404;
+    margin: 0;
+}
+
+/* Tab navigation */
+.tab-navigation {
+    display: flex;
+    background: #f0f2f5;
+    border-radius: 8px;
+    padding: 3px;
+    margin-bottom: 15px;
+}
+
+.tab-option {
+    flex: 1;
+    padding: 8px 12px;
+    text-align: center;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 600;
+    background: none;
+    border: none;
+    color: #666;
+}
+
+.tab-option:hover {
+    color: #667eea;
+}
+
+.tab-option.active {
+    background: white;
+    color: #667eea;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Loading states for dashboard */
+.loading-card {
+    background: #f8f9ff;
+    border-radius: 12px;
+    padding: 15px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+}
+
+.loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #e1e8ed;
+    border-top-color: #667eea;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Responsive adjustments for dashboard */
+@media (max-width: 480px) {
+    .meal-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+    }
+    
+    .macros {
+        flex-direction: column;
+        gap: 2px;
+    }
+    
+    .grocery-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 5px;
+        padding: 12px;
+    }
+    
+    .grocery-item-quantity,
+    .grocery-item-price {
+        margin: 0;
+    }
+}
