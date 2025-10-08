@@ -1,19 +1,20 @@
 version: "3.8"
 
 services:
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: qdrant
-    ports:
-      - "6333:6333"   # REST
-      - "6334:6334"   # gRPC
-    volumes:
-      - ./qdrant_storage:/qdrant/storage
-    environment:
-      QDRANT__SERVICE__GRPC_PORT: 6334
-      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
-      QDRANT__SERVICE__ENABLE_CORS: "true"
-    restart: unless-stopped
+  # Connect to the free Qdrant Cloud instance instead of running locally
+  # qdrant:
+  #   image: qdrant/qdrant:latest
+  #   container_name: qdrant
+  #   ports:
+  #     - "6333:6333"   # REST
+  #     - "6334:6334"   # gRPC
+  #   volumes:
+  #     - ./qdrant_storage:/qdrant/storage
+  #   environment:
+  #     QDRANT__SERVICE__GRPC_PORT: 6334
+  #     QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
+  #     QDRANT__SERVICE__ENABLE_CORS: "true"
+  #   restart: unless-stopped
 
   app:
     build:
@@ -23,12 +24,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
       QDRANT_COLLECTION: "recipes"
+      QDRANT_API_KEY: "${QDRANT_API_KEY}"
       EMBED_MODEL: "intfloat/e5-base-v2"
       TFIDF_PATH: "/app_state/tfidf.pkl"
-    depends_on:
-      - qdrant   # app itself waits for /readyz in startup hook
     volumes:
       - ./app_state:/app_state      # persist tfidf.pkl (for hybrid)
       - ./data:/data                # mount your recipes_tagged.jsonl

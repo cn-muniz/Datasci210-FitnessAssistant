@@ -10,10 +10,11 @@ from qdrant_client.http.models import (
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
+import getpass
 
-COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)
+COLLECTION = "recipes"
+QDRANT_URL = "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
+QDRANT_API_KEY = getpass.getpass("Qdrant API Key: ")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
 
@@ -59,16 +60,49 @@ def embed(model: SentenceTransformer, text: str) -> List[float]:
     return v.astype("float32").tolist()
 
 def ensure_collection(client: QdrantClient, dim: int, use_sparse: bool):
-    client.recreate_collection(
-        collection_name=COLLECTION,
-        vectors_config={"text_embedding": VectorParams(size=dim, distance=Distance.COSINE)},
-        sparse_vectors_config={"sparse_embedding": SparseVectorParams()} if use_sparse else None,
-    )
-    # Index payload fields for fast filtering:
-    for fld in ("cuisines","diet_tags","methods","course"):
-        client.create_payload_index(COLLECTION, field_name=fld, field_schema=PayloadSchemaType.KEYWORD)
-    for fld in ("macros_per_serving.cal","macros_per_serving.protein_g","macros_per_serving.fat_g","macros_per_serving.carbs_g"):
-        client.create_payload_index(COLLECTION, field_name=fld, field_schema=PayloadSchemaType.FLOAT)
+    input(f"Client pointed to Qdrant at {QDRANT_URL} with collection '{COLLECTION}'. Press Enter to continue...")
+
+    # 1) Create collection if missing (do NOT drop data)
+    if not client.collection_exists(COLLECTION):
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config={"text_embedding": VectorParams(size=dim, distance=Distance.COSINE)},
+            sparse_vectors_config={"sparse_embedding": SparseVectorParams()} if use_sparse else None,
+        )
+
+    # 2) Create payload indexes if missing (fast filters)
+    info = client.get_collection(COLLECTION).model_dump()
+    existing = set((info.get("payload_schema") or {}).keys())
+
+    def idx(field_name: str, schema):
+        if field_name not in existing:
+            client.create_payload_index(COLLECTION, field_name=field_name, field_schema=schema, wait=True)
+
+    # keyword/tag fields (use the actual keys you store)
+    for fld in ("cuisines", "diet_tags_llm", "methods", "course"):
+        idx(fld, PayloadSchemaType.KEYWORD)
+
+    # numeric ranges
+    for fld in (
+        "macros_per_serving.cal",
+        "macros_per_serving.protein_g",
+        "macros_per_serving.fat_g",
+        "macros_per_serving.carbs_g",
+        "macros_per_serving.sodium_mg",
+    ):
+        idx(fld, PayloadSchemaType.FLOAT)
+
+    # boolean flags — adjust names to match your payload
+    # If you store nested: diet_flags.vegan, use dot-notation below.
+    for fld in (
+        "diet_flags.vegetarian",
+        "diet_flags.vegan",
+        "diet_flags.pescatarian",   # <- note spelling!
+        "diet_flags.gluten_free",
+        "diet_flags.dairy_free",
+    ):
+        idx(fld, PayloadSchemaType.BOOL)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -91,6 +125,23 @@ def main():
             tfidf = pickle.load(f)
 
     ensure_collection(client, dim=dim, use_sparse=args.use_sparse)
+
+    # Check to make sure collection is created
+    try:
+        exists = client.collection_exists(COLLECTION)
+        if not exists:
+            raise RuntimeError(f"Collection {COLLECTION} does not exist after creation attempt")
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect to Qdrant at {QDRANT_URL}: {e}")
+    
+    # print("client version:", __import__("qdrant_client").__version__)
+    print("exists?", client.collection_exists(COLLECTION))
+    meta = client.get_collection(COLLECTION).model_dump()
+    print("status:", meta["status"], "| vector size:", meta["config"]["params"]["vectors"].get("size"))
+    print("payload indexes:", list((meta.get("payload_schema") or {}).keys()))
+
+    # Press enter to continue
+    input("Press Enter to continue with upsert...")
 
     # Second pass: upsert points
     batch = []

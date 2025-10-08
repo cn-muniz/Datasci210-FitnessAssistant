@@ -2,100 +2,305 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Recipe Search (Qdrant)</title>
+  <title>Recipe Search (Qdrant Cloud)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{
-      --fg:#111; --muted:#555; --border:#eaeaea; --bg:#fff; --code:#f6f8fa;
+      --fg:#0f172a; --muted:#475569; --border:#e2e8f0; --bg:#ffffff; --card:#ffffff; --chip:#f1f5f9; --accent:#111827;
+      --shadow: 0 6px 24px rgba(2,6,23,.08), 0 2px 8px rgba(2,6,23,.06);
+      --radius:14px;
+      --ok:#16a34a; --warn:#f59e0b; --err:#dc2626;
     }
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;max-width:960px;color:var(--fg);background:var(--bg)}
-    h1{margin:0 0 12px}
-    form, .filters{display:grid;gap:8px;grid-template-columns:repeat(6,1fr);align-items:end}
-    form .wide{grid-column:1 / -1}
-    label{font-size:12px;color:#444}
-    input,select,button{padding:8px;border:1px solid #ccc;border-radius:8px}
-    button{cursor:pointer;background:#111;color:#fff}
-    .result{border:1px solid var(--border);border-radius:12px;padding:12px;margin:12px 0}
-    .meta{color:var(--muted);font-size:13px;margin:4px 0 8px}
-    .payload{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;background:var(--code);border-radius:8px;padding:8px}
-    .row{display:flex;gap:8px;align-items:center}
+    html,body{height:100%}
+    body{font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:0; color:var(--fg); background:var(--bg)}
+    .container{max-width:1100px; margin:0 auto; padding:20px 20px 32px}
+    header{display:flex; align-items:center; justify-content:space-between; margin-bottom:12px}
+    h1{font-size:22px; margin:0; letter-spacing:.2px}
+    .hint{color:var(--muted); font-size:13px}
 
-    /* Minimal Markdown styling */
-    .md-card h1,.md-card h2,.md-card h3{margin:0.3em 0}
-    .md-card h1{font-size:1.35rem}
-    .md-card h2{font-size:1.1rem}
-    .md-card h3{font-size:1rem}
-    .md-card p{margin:0.4em 0 0.6em}
-    .md-card ul{margin:0.4em 0 0.6em 1.2em}
-    .md-card ol{margin:0.4em 0 0.6em 1.2em}
-    .md-card code{background:var(--code);padding:0.1em 0.3em;border-radius:4px}
-    .md-card hr{border:none;border-top:1px solid var(--border);margin:0.8em 0}
+    /* Connection pill */
+    .conn{display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:#fff; box-shadow: var(--shadow); font-size:13px}
+    .dot{width:10px; height:10px; border-radius:50%}
+    .dot.ok{background:var(--ok)}
+    .dot.warn{background:var(--warn)}
+    .dot.err{background:var(--err)}
+    .spinner{
+      width:12px; height:12px; border:2px solid #cbd5e1; border-top-color:#0ea5e9; border-radius:50%;
+      animation:spin 0.8s linear infinite;
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Sticky filter bar */
+    .filters-card{
+      position:sticky; top:0; z-index:20; backdrop-filter: blur(10px);
+      background: rgba(255,255,255,.85); box-shadow: var(--shadow);
+      border:1px solid var(--border); border-radius: var(--radius); padding:14px; margin-bottom:16px;
+    }
+
+    label{font-size:12px; color:var(--muted); margin-bottom:6px; display:block}
+    input[type="text"], input[type="number"], button{
+      width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid var(--border);
+      border-radius:10px; background:#fff; outline:none;
+    }
+    input[type="text"]:focus, input[type="number"]:focus{border-color:#94a3b8; box-shadow:0 0 0 3px rgba(148,163,184,.15)}
+    .btn{background:var(--accent); color:#fff; border:none; cursor:pointer; font-weight:600}
+    .btn[disabled]{opacity:.5; cursor:not-allowed}
+    .btn.ghost{background:#fff; color:#0f172a; border:1px solid var(--border)}
+
+    .row{display:grid; gap:10px}
+    .row-cols{grid-template-columns: repeat(12, minmax(0,1fr))}
+    .wide{grid-column:1 / -1}
+    .col-3{grid-column: span 3}
+    .col-2{grid-column: span 2}
+    .col-1{grid-column: span 1}
+
+    .range{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+    .checks{display:flex; flex-wrap:wrap; gap:12px}
+    .chip{display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--chip); border:1px solid var(--border); border-radius:999px; font-size:13px}
+    .chip input{width:16px; height:16px}
+
+    .chip.ok { background:#ecfdf5; border-color:#bbf7d0; color:#065f46; }
+    .chip.ok .dot { width:8px; height:8px; border-radius:50%; background:#10b981; }
+    .chip.muted { background:#f8fafc; border-color:#e2e8f0; color:#64748b; }
+
+    details{border-top:1px dashed var(--border); margin-top:10px; padding-top:12px}
+    summary{cursor:pointer; user-select:none; color:#0f172a; font-weight:600}
+    summary::-webkit-details-marker{display:none}
+    summary::after{content:"▾"; margin-left:6px; color:#334155}
+    details[open] summary::after{content:"▴"}
+
+    .status{color:var(--muted); font-size:13px; margin:8px 0 14px}
+    .result{border:1px solid var(--border); border-radius: var(--radius); padding:14px; margin:14px 0; background:var(--card); box-shadow: var(--shadow)}
+    .meta{color:var(--muted); font-size:13px; margin:4px 0 8px}
+    .payload{white-space:pre-wrap; font-family:ui-monospace,Menlo,monospace; background:#f8fafc; border-radius:10px; padding:10px; border:1px solid var(--border)}
+    .md-card h1,.md-card h2,.md-card h3{margin:0.2em 0}
+    .md-card h1{font-size:1.25rem}
+    .md-card h2{font-size:1.05rem}
+    .md-card p{margin:.35em 0 .55em}
+    .md-card ul,.md-card ol{margin:.3em 0 .6em 1.2em}
+
+    @media (max-width: 980px){
+      .col-3{grid-column: span 4}
+      .col-2{grid-column: span 3}
+      .col-1{grid-column: span 2}
+    }
+    @media (max-width: 720px){
+      .row-cols{grid-template-columns: repeat(6, minmax(0,1fr))}
+      .col-3{grid-column: span 6}
+      .col-2{grid-column: span 3}
+      .col-1{grid-column: span 3}
+    }
+    @media (max-width: 520px){
+      .row-cols{grid-template-columns: repeat(4, minmax(0,1fr))}
+      .col-3,.col-2,.col-1{grid-column: span 4}
+      .checks{gap:8px}
+    }
   </style>
-  <!-- Markdown renderer + sanitizer -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 </head>
 <body>
-  <h1>Recipe Search</h1>
-  <form id="search-form">
-    <div class="wide">
-      <label>Query</label>
-      <input id="q" type="text" placeholder="e.g., mediterranean main, lemon garlicky, ~650 kcal ~40g protein" required />
-    </div>
-    <div>
-      <label>Cal min</label>
-      <input id="cal_min" type="number" step="1" />
-    </div>
-    <div>
-      <label>Cal max</label>
-      <input id="cal_max" type="number" step="1" />
-    </div>
-    <div>
-      <label>Min protein (g)</label>
-      <input id="min_protein" type="number" step="1" />
-    </div>
-    <div>
-      <label>Cuisine</label>
-      <input id="cuisine" type="text" placeholder="thai / mediterranean / global" />
-    </div>
-    <div>
-      <label>Diet tag</label>
-      <input id="diet" type="text" placeholder="vegetarian / high-protein / keto" />
-    </div>
-    <div>
-      <label>Top K</label>
-      <input id="limit" type="number" value="5" min="1" max="50" />
-    </div>
-    <div class="row">
-      <input id="hybrid" type="checkbox" />
-      <label for="hybrid">Hybrid (dense + sparse)</label>
-    </div>
-    <div>
-      <button type="submit">Search</button>
-    </div>
-  </form>
+  <div class="container">
+    <header>
+      <h1>🍽️ Recipe Finder</h1>
+      <div class="conn" id="conn">
+        <div class="spinner" id="connSpinner" aria-label="connecting"></div>
+        <div class="dot ok" id="connDot" style="display:none"></div>
+        <span id="connText">Connecting…</span>
+      </div>
+    </header>
 
-  <div id="status" class="meta"></div>
-  <div id="results"></div>
+    <div class="filters-card">
+      <form id="search-form" class="row row-cols">
+        <div class="wide">
+          <label>Query</label>
+          <input id="q" type="text" placeholder="e.g., mediterranean main, lemon garlicky, ~650 kcal ~40g protein" required />
+        </div>
+
+        <div class="col-3">
+          <label>Calories (min–max)</label>
+          <div class="range">
+            <input id="cal_min" type="number" step="1" placeholder="min" />
+            <input id="cal_max" type="number" step="1" placeholder="max" />
+          </div>
+        </div>
+        <div class="col-3">
+          <label>Protein (g, min–max)</label>
+          <div class="range">
+            <input id="protein_min" type="number" step="1" placeholder="min" />
+            <input id="protein_max" type="number" step="1" placeholder="max" />
+          </div>
+        </div>
+        <div class="col-2">
+          <label>Cuisine</label>
+          <input id="cuisine_tag" type="text" placeholder="thai / mediterranean / global" />
+        </div>
+        <div class="col-2">
+          <label>Meal</label>
+          <input id="meal_tag" type="text" placeholder="main / breakfast ..." />
+        </div>
+        <div class="col-1">
+          <label>Top K</label>
+          <input id="limit" type="number" value="5" min="1" max="50" />
+        </div>
+        <div class="col-1">
+          <label>&nbsp;</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input id="hybrid" type="checkbox" />
+            <span class="hint" title="Dense + sparse fusion">Hybrid</span>
+          </div>
+        </div>
+        <div class="col-2">
+          <label>&nbsp;</label>
+          <button class="btn" type="submit" id="searchBtn" disabled>Search</button>
+        </div>
+
+        <div class="wide">
+          <details id="adv">
+            <summary>Advanced filters</summary>
+            <div class="row row-cols" style="margin-top:10px">
+              <div class="col-2">
+                <label>Diet tag</label>
+                <input id="diet_tag" type="text" placeholder="vegetarian / keto / ..." />
+              </div>
+              <div class="col-3">
+                <label>Carbs (g, min–max)</label>
+                <div class="range">
+                  <input id="carbs_min" type="number" step="1" placeholder="min" />
+                  <input id="carbs_max" type="number" step="1" placeholder="max" />
+                </div>
+              </div>
+              <div class="col-3">
+                <label>Fat (g, min–max)</label>
+                <div class="range">
+                  <input id="fat_min" type="number" step="1" placeholder="min" />
+                  <input id="fat_max" type="number" step="1" placeholder="max" />
+                </div>
+              </div>
+              <div class="col-3">
+                <label>Sodium (mg, min–max)</label>
+                <div class="range">
+                  <input id="sodium_min" type="number" step="1" placeholder="min" />
+                  <input id="sodium_max" type="number" step="1" placeholder="max" />
+                </div>
+              </div>
+
+              <div class="wide">
+                <label>Diet flags</label>
+                <div class="checks">
+                  <label class="chip"><input id="vegan" type="checkbox" /> vegan</label>
+                  <label class="chip"><input id="vegetarian" type="checkbox" /> vegetarian</label>
+                  <label class="chip"><input id="pescatarian" type="checkbox" /> pescatarian</label>
+                  <label class="chip"><input id="gluten_free" type="checkbox" /> gluten_free</label>
+                  <label class="chip"><input id="dairy_free" type="checkbox" /> dairy_free</label>
+                </div>
+              </div>
+
+              <div class="wide" style="display:flex; gap:10px; margin-top:8px">
+                <button type="button" class="btn ghost" id="reset">Reset filters</button>
+              </div>
+            </div>
+          </details>
+        </div>
+      </form>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div id="results"></div>
+  </div>
 
   <script>
     const form = document.getElementById('search-form');
     const statusEl = document.getElementById('status');
     const resultsEl = document.getElementById('results');
+    const resetBtn = document.getElementById('reset');
+    const searchBtn = document.getElementById('searchBtn');
+
+    // Connection pill elements
+    const connSpinner = document.getElementById('connSpinner');
+    const connDot = document.getElementById('connDot');
+    const connText = document.getElementById('connText');
+
+    // Poll server status
+    let pollTimer = null;
+    async function pollStatus(){
+      try{
+        const r = await fetch('/status', {cache:'no-store'});
+        const s = await r.json();
+
+        if (s.error){
+          connSpinner.style.display = 'none';
+          connDot.className = 'dot err';
+          connDot.style.display = 'inline-block';
+          connText.textContent = 'Error: ' + s.error;
+          searchBtn.disabled = true;
+          return;
+        }
+
+        const ready = !!s.ready_for_dense;
+        if (ready){
+          connSpinner.style.display = 'none';
+          connDot.className = 'dot ok';
+          connDot.style.display = 'inline-block';
+          connText.textContent = 'Connected';
+          searchBtn.disabled = false;
+          clearInterval(pollTimer); pollTimer = null;
+        } else {
+          connSpinner.style.display = 'inline-block';
+          connDot.style.display = 'none';
+          let waitingFor = [];
+          if(!s.client_ok) waitingFor.push('Qdrant');
+          if(s.client_ok && !s.collection_ok) waitingFor.push('collection');
+          if(!s.model_loaded) waitingFor.push('model');
+          connText.textContent = 'Connecting… ' + (waitingFor.length ? `(${waitingFor.join(', ')})` : '');
+          searchBtn.disabled = true;
+        }
+      }catch(e){
+        connSpinner.style.display = 'inline-block';
+        connDot.style.display = 'none';
+        connText.textContent = 'Connecting…';
+        searchBtn.disabled = true;
+      }
+    }
+    pollStatus();
+    pollTimer = setInterval(pollStatus, 1000);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (searchBtn.disabled) return;
+
       resultsEl.innerHTML = '';
-      statusEl.textContent = 'Searching...';
+      statusEl.textContent = 'Searching…';
 
       const payload = {
         query: document.getElementById('q').value.trim(),
-        limit: parseInt(document.getElementById('limit').value || '5', 10),
+        limit: intOr( document.getElementById('limit').value, 5 ),
+
         cal_min: numOrNull(document.getElementById('cal_min').value),
         cal_max: numOrNull(document.getElementById('cal_max').value),
-        min_protein: numOrNull(document.getElementById('min_protein').value),
-        cuisine: emptyToNull(document.getElementById('cuisine').value),
-        diet: emptyToNull(document.getElementById('diet').value),
+
+        protein_min: numOrNull(document.getElementById('protein_min').value),
+        protein_max: numOrNull(document.getElementById('protein_max').value),
+
+        carbs_min: numOrNull(document.getElementById('carbs_min').value),
+        carbs_max: numOrNull(document.getElementById('carbs_max').value),
+
+        fat_min: numOrNull(document.getElementById('fat_min').value),
+        fat_max: numOrNull(document.getElementById('fat_max').value),
+
+        sodium_min: numOrNull(document.getElementById('sodium_min').value),
+        sodium_max: numOrNull(document.getElementById('sodium_max').value),
+
+        cuisine_tag: textOrNull(document.getElementById('cuisine_tag').value),
+        diet_tag: textOrNull(document.getElementById('diet_tag').value),
+        meal_tag: textOrNull(document.getElementById('meal_tag').value),
+
+        vegan:        document.getElementById('vegan').checked ? true : null,
+        vegetarian:   document.getElementById('vegetarian').checked ? true : null,
+        pescatarian:  document.getElementById('pescatarian').checked ? true : null,
+        gluten_free:  document.getElementById('gluten_free').checked ? true : null,
+        dairy_free:   document.getElementById('dairy_free').checked ? true : null,
+
         hybrid: document.getElementById('hybrid').checked,
       };
 
@@ -105,8 +310,15 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
         });
+
+        if (resp.status === 503){
+          const data = await resp.json();
+          statusEl.textContent = 'Server not ready. Please wait…';
+          return;
+        }
+
         const data = await resp.json();
-        statusEl.textContent = `Found ${data.count} result(s) — hybrid used: ${data.hybrid_used}`;
+        statusEl.textContent = `Found ${data.count} result(s) — hybrid used: ${data.hybrid_used ? "yes" : "no"}`;
         renderResults(data.results || []);
       } catch (err) {
         console.error(err);
@@ -114,8 +326,29 @@
       }
     });
 
+    resetBtn?.addEventListener('click', () => {
+      for (const id of [
+        "cal_min","cal_max","protein_min","protein_max",
+        "carbs_min","carbs_max","fat_min","fat_max",
+        "sodium_min","sodium_max","cuisine_tag","diet_tag","meal_tag"
+      ]) document.getElementById(id).value = "";
+
+      for (const id of ["vegan","vegetarian","pescatarian","gluten_free","dairy_free"])
+        document.getElementById(id).checked = false;
+    });
+
     function numOrNull(v){ const x = parseFloat(v); return isNaN(x) ? null : x; }
-    function emptyToNull(v){ v = (v||'').trim(); return v.length ? v : null; }
+    function textOrNull(v){ v = (v||'').trim(); return v.length ? v : null; }
+    function intOr(v, d){ const x = parseInt(v,10); return isNaN(x) ? d : x; }
+
+    function dietFlagChips(payload){
+      const df = payload.diet_flags || {};
+      const order = ["vegan","vegetarian","pescatarian","gluten_free","dairy_free"];
+      const labels = { vegan:"vegan", vegetarian:"vegetarian", pescatarian:"pescatarian", gluten_free:"gluten_free", dairy_free:"dairy_free" };
+      const on = order.filter(k => df[k] === true);
+      if (!on.length) return `<span class="chip muted">no diet flags</span>`;
+      return on.map(k => `<span class="chip ok"><span class="dot"></span>${labels[k]}</span>`).join(" ");
+    }
 
     function renderResults(items){
       if(!items.length){ resultsEl.textContent = 'No results.'; return; }
@@ -124,23 +357,21 @@
         const div = document.createElement('div');
         div.className = 'result';
 
-        // Markdown card (full)
         const md = p.search_card_full_md || '';
         const mdHTML = DOMPurify.sanitize(marked.parse(md));
+        const sodium = mac.sodium_mg != null ? `${Math.round(mac.sodium_mg)} mg sodium` : "sodium n/a";
+        const flagsHTML = dietFlagChips(p);
 
         div.innerHTML = `
           <div class="md-card">${mdHTML}</div>
           <div class="meta">
             cuisines=${JSON.stringify(p.cuisines||[])} |
-            course=${JSON.stringify(p.course||null)} |
-            methods=${JSON.stringify(p.methods||[])} |
-            diet=${JSON.stringify(p.diet_tags||[])} |
-            min_servings=${JSON.stringify(p.servings_min||1)} |
-            max_servings=${JSON.stringify(p.servings_max||1)} |
-            avg_servings=${JSON.stringify(p.servings_avg)||1}
+            meal=${JSON.stringify(p.course||null)} |
+            diet=${JSON.stringify(p.diet_tags||[])}
           </div>
+          <div class="meta">Diet flags: ${flagsHTML}</div>
           <div class="meta">
-            per-serving: ${Math.round(mac.cal||0)} kcal · ${(mac.protein_g||0).toFixed(1)}g protein · ${(mac.fat_g||0).toFixed(1)}g fat
+            per-serving: ${Math.round(mac.cal||0)} kcal · ${(mac.protein_g||0).toFixed(1)}g protein · ${(mac.carbs_g??0).toFixed(1)}g carbs · ${(mac.fat_g||0).toFixed(1)}g fat · ${sodium}
           </div>
           <details>
             <summary>Full payload (JSON)</summary>
@@ -153,6 +384,11 @@
 
     function escapeHtml(s){
       return String(s).replace(/[&<>"']/g, (m)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+    }
+
+    if (window.innerHeight > 900) {
+      const adv = document.getElementById('adv');
+      if (adv) adv.open = true;
     }
   </script>
 </body>
