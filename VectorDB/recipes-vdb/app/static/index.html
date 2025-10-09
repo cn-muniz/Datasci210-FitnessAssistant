@@ -18,7 +18,6 @@
     h1{font-size:22px; margin:0; letter-spacing:.2px}
     .hint{color:var(--muted); font-size:13px}
 
-    /* Connection pill */
     .conn{display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--border); border-radius:999px; background:#fff; box-shadow: var(--shadow); font-size:13px}
     .dot{width:10px; height:10px; border-radius:50%}
     .dot.ok{background:var(--ok)}
@@ -30,7 +29,6 @@
     }
     @keyframes spin{to{transform:rotate(360deg)}}
 
-    /* Sticky filter bar */
     .filters-card{
       position:sticky; top:0; z-index:20; backdrop-filter: blur(10px);
       background: rgba(255,255,255,.85); box-shadow: var(--shadow);
@@ -141,7 +139,7 @@
         </div>
         <div class="col-1">
           <label>Top K</label>
-          <input id="limit" type="number" value="5" min="1" max="50" />
+          <input id="limit" type="number" value="1" min="1" max="50" />
         </div>
         <div class="col-1">
           <label>&nbsp;</label>
@@ -150,6 +148,15 @@
             <span class="hint" title="Dense + sparse fusion">Hybrid</span>
           </div>
         </div>
+
+        <div class="col-2">
+          <label>&nbsp;</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input id="top_only" type="checkbox" checked />
+            <span class="hint" title="Call /recipes/top to return a single best recipe">Top only</span>
+          </div>
+        </div>
+
         <div class="col-2">
           <label>&nbsp;</label>
           <button class="btn" type="submit" id="searchBtn" disabled>Search</button>
@@ -274,7 +281,7 @@
 
       const payload = {
         query: document.getElementById('q').value.trim(),
-        limit: intOr( document.getElementById('limit').value, 5 ),
+        limit: intOr( document.getElementById('limit').value, 1 ),
 
         cal_min: numOrNull(document.getElementById('cal_min').value),
         cal_max: numOrNull(document.getElementById('cal_max').value),
@@ -304,15 +311,17 @@
         hybrid: document.getElementById('hybrid').checked,
       };
 
+      const endpoint = document.getElementById('top_only').checked ? '/recipes/top' : '/search';
+
       try {
-        const resp = await fetch('/search', {
+        const resp = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
         });
 
         if (resp.status === 503){
-          const data = await resp.json();
+          await resp.json(); // detail has status info
           statusEl.textContent = 'Server not ready. Please wait…';
           return;
         }
@@ -335,6 +344,9 @@
 
       for (const id of ["vegan","vegetarian","pescatarian","gluten_free","dairy_free"])
         document.getElementById(id).checked = false;
+
+      document.getElementById('limit').value = 1;
+      document.getElementById('top_only').checked = true;
     });
 
     function numOrNull(v){ const x = parseFloat(v); return isNaN(x) ? null : x; }
