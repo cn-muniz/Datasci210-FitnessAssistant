@@ -15,9 +15,9 @@ services:
       RECIPE_API_KEY: your-token-if-needed
       FLASK_APP: app.py
       FLASK_DEBUG: 1
-    # volumes:
-    #   - ../fitness_app:/app
-    command: python app.py
+    volumes:
+      - ../fitness_app:/app
+    # command: python app.py
   api:
     build:
       context: ../VectorDB/recipes-vdb/app

@@ -30,7 +30,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::730335624951:role/aws-service-role/apprunner.amazonaws.com/AWSServiceRoleForAppRunner
+          role-to-assume: arn:aws:iam::730335624951:role/github-ecr-publish
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Get AWS account ID
