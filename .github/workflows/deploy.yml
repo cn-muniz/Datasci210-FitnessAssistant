@@ -1,0 +1,80 @@
+name: Build & Push Docker Images to ECR
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "docker-config/**"
+      - "fitness_app/**"
+      - "VectorDB/recipes-vdb/app/**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  id-token: write    # for OIDC
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_API_REPO: recipe-api
+  ECR_WEB_REPO: fitness-web
+  PLATFORMS: linux/amd64   # set to "linux/amd64,linux/arm64" if you want multi-arch
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/<YOUR_GITHUB_OIDC_ROLE_NAME>
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS account ID
+        id: aws
+        run: |
+          echo "ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+      - name: Ensure ECR repositories exist
+        run: |
+          aws ecr describe-repositories --repository-name "${ECR_API_REPO}" --region "${AWS_REGION}" >/dev/null 2>&1 || \
+            aws ecr create-repository --repository-name "${ECR_API_REPO}" --region "${AWS_REGION}" >/dev/null
+          aws ecr describe-repositories --repository-name "${ECR_WEB_REPO}" --region "${AWS_REGION}" >/dev/null 2>&1 || \
+            aws ecr create-repository --repository-name "${ECR_WEB_REPO}" --region "${AWS_REGION}" >/dev/null
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image names
+        id: names
+        run: |
+          echo "API_IMAGE=${{ steps.aws.outputs.ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_API_REPO}:latest" >> $GITHUB_OUTPUT
+          echo "WEB_IMAGE=${{ steps.aws.outputs.ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_WEB_REPO}:latest" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build & push API image
+      - name: Build & push API
+        uses: docker/build-push-action@v5
+        with:
+          context: ./VectorDB/recipes-vdb/app
+          file: ./VectorDB/recipes-vdb/app/Dockerfile
+          push: true
+          tags: ${{ steps.names.outputs.API_IMAGE }}
+          platforms: ${{ env.PLATFORMS }}
+          provenance: false
+
+      # Build & push WEB image
+      - name: Build & push WEB
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker-config/Dockerfile
+          push: true
+          tags: ${{ steps.names.outputs.WEB_IMAGE }}
+          platforms: ${{ env.PLATFORMS }}
+          provenance: false

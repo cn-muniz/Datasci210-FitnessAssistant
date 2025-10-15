@@ -1,7 +1,7 @@
-import os, time, pickle, threading
+import os, time, pickle, threading, json
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import FastAPI, Body, HTTPException, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,14 +21,27 @@ import numpy as np
 
 COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
 
-def _from_env_or_file(var: str, default=None):
-    path = os.getenv(f"{var}_FILE")
-    if path and os.path.exists(path):
-        return open(path, "r", encoding="utf-8").read().strip()
-    return os.getenv(var, default)
+# def _from_env_or_file(var: str, default=None):
+#     path = os.getenv(f"{var}_FILE")
+#     if path and os.path.exists(path):
+#         return open(path, "r", encoding="utf-8").read().strip()
+#     return os.getenv(var, default)
+def _get_qdrant_key():
+    raw = os.getenv("QDRANT_API_KEY", "").strip()
+    # handle Secrets Manager key/value JSON or quoted values
+    if raw.startswith("{") and ":" in raw:
+        try:
+            d = json.loads(raw)
+            # try common keys
+            for k in ("QDRANT_API_KEY", "api_key", "key"):
+                if k in d and isinstance(d[k], str):
+                    return d[k].strip().strip('"')
+        except Exception:
+            pass
+    return raw.strip().strip('"')
 
 QDRANT_URL = os.getenv("QDRANT_URL", "https://YOUR-CLOUD-URL:6333")
-QDRANT_API_KEY = _from_env_or_file("QDRANT_API_KEY", None)
+QDRANT_API_KEY = _get_qdrant_key()
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
@@ -455,3 +468,29 @@ def meal_plan(payload: MealPlanRequest = Body(...)):
         total_calories=total_calories,
         meals=meals,
     )
+
+# For Debugging / Diagnostics
+diag = APIRouter()
+
+@diag.get("/_diag/env")
+def diag_env():
+    v = os.getenv("QDRANT_API_KEY", "")
+    return {
+        "QDRANT_URL": QDRANT_URL,
+        "QDRANT_COLLECTION": COLLECTION,
+        "QDRANT_API_KEY_present": bool(v),
+        "QDRANT_API_KEY_len": len(v or ""),
+        "QDRANT_API_KEY_is_json": (v.strip().startswith("{") if v else False),
+        "QDRANT_API_KEY_sample": (v.strip()[:4] + "..." + v.strip()[-4:] if v else ""),
+    }
+
+@diag.get("/_diag/qdrant")
+def diag_qdrant():
+    try:
+        # lightweight auth probe
+        r = client.get_collection(COLLECTION)
+        return {"ok": True, "collection": COLLECTION}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+app.include_router(diag)

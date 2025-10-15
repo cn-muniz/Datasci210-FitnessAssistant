@@ -2,7 +2,7 @@ FROM python:3.12
 
 WORKDIR /app
 
-COPY ../fitness_app/requirements.txt .
+COPY ../fitness_app/ /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 5000
