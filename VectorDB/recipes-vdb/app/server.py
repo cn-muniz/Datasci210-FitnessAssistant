@@ -33,6 +33,15 @@ QDRANT_API_KEY = _from_env_or_file("QDRANT_API_KEY", None)
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
 
+MEAL_PLAN_CONFIG = [
+    {"name": "breakfast", "calorie_pct": 0.25, "query": "healthy breakfast", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.30, "query": "easy lunch salad", "meal_tag": "salad"},
+    {"name": "dinner", "calorie_pct": 0.30, "query": "healthy dinner", "meal_tag": "main"},
+    {"name": "snack", "calorie_pct": 0.15, "query": "healthy snack", "meal_tag": "snack"},
+]
+MEAL_PLAN_TOLERANCE = 0.025  # 2.5% wiggle room per course
+DIETARY_FLAG_FIELDS = {"vegan", "vegetarian", "pescatarian", "gluten_free", "dairy_free"}
+
 # --------------- App setup ---------------
 
 app = FastAPI(
@@ -180,6 +189,39 @@ class SearchResponse(BaseModel):
     count: int
     results: List[Dict[str, Any]]
 
+class MacroSummary(BaseModel):
+    protein: str
+    carbs: str
+    fat: str
+
+class MealSummary(BaseModel):
+    title: str
+    calories: int
+    description: Optional[str] = None
+    macros: MacroSummary
+    instructions: Optional[str] = None
+    ingredients: Optional[List[str]] = None
+    quantities: Optional[List[str]] = None
+    units: Optional[List[str]] = None
+    meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
+
+class MealPlanRequest(BaseModel):
+    caloric_target: float = Field(..., gt=0, description="Desired total calories for the day")
+    dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "caloric_target": 2750,
+                "dietary": ["vegetarian", "dairy_free"]
+            }
+        }
+
+class MealPlanResponse(BaseModel):
+    target_calories: float
+    total_calories: float
+    meals: List[Optional[MealSummary]]
+
 # --------------- Helpers -----------------
 
 def embed_query(text: str) -> List[float]:
@@ -297,6 +339,37 @@ def _core_search(payload: RecipeSearchRequest, force_limit: Optional[int] = None
 
     return SearchResponse(hybrid_used=use_sparse, count=len(results), results=results)
 
+def _dietary_kwargs(dietary: List[str]) -> Dict[str, bool]:
+    return {flag: True for flag in dietary if flag in DIETARY_FLAG_FIELDS}
+
+def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str) -> Optional[MealSummary]:
+    if not recipe_payload:
+        return None
+
+    macros = recipe_payload.get("macros_per_serving", {}) or {}
+    def _macro_val(key: str) -> float:
+        val = macros.get(key, 0) or 0
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return MealSummary(
+        meal_type=meal_type,
+        title=recipe_payload.get("title", ""),
+        calories=int(_macro_val("cal") + 0.5),
+        description=recipe_payload.get("summary"),
+        instructions=recipe_payload.get("instructions"),
+        ingredients=recipe_payload.get("ingredients_raw"),
+        quantities=[q["text"] for q in recipe_payload.get("quantities")],
+        units=[u["text"] for u in recipe_payload.get("units")],
+        macros=MacroSummary(
+            protein=f"{int(_macro_val('protein_g') + 0.5)}g",
+            carbs=f"{int(_macro_val('carbs_g') + 0.5)}g",
+            fat=f"{int(_macro_val('fat_g') + 0.5)}g",
+        ),
+    )
+
 # --------------- Endpoints ----------------
 
 @app.get("/status", tags=["Ops"])
@@ -324,3 +397,61 @@ def search(payload: RecipeSearchRequest = Body(...)):
 def top_recipe(payload: RecipeSearchRequest = Body(...)):
     """Return exactly one recipe (the top match) for easy web-app calls."""
     return _core_search(payload, force_limit=1)
+
+@app.post(
+    "/meal-plan",
+    response_model=MealPlanResponse,
+    tags=["Meal Plan"],
+    summary="Generate a one-day meal plan using caloric target and dietary restrictions",
+)
+def meal_plan(payload: MealPlanRequest = Body(...)):
+    """Return a simple four-meal day (breakfast, lunch, dinner, snack) tailored to calorie target + diet flags."""
+    _assert_ready()
+
+    original_target = float(payload.caloric_target)
+    adjusted_target = float(payload.caloric_target)
+    dietary_kwargs = _dietary_kwargs(payload.dietary)
+
+    meals: List[Optional[MealSummary]] = []
+    total_calories = 0.0
+
+    for cfg in MEAL_PLAN_CONFIG:
+        pct = cfg["calorie_pct"]
+        cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
+        cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
+
+        request_payload = RecipeSearchRequest(
+            query=cfg["query"],
+            limit=1,
+            meal_tag=cfg["meal_tag"],
+            cal_min=cal_min,
+            cal_max=cal_max,
+            **dietary_kwargs,
+        )
+
+        search_response = _core_search(request_payload, force_limit=1)
+        recipe_payload = search_response.results[0] if search_response.results else None
+        meal_summary = _format_meal_result(recipe_payload, cfg["name"])
+        meals.append(meal_summary)
+
+        actual_calories = 0.0
+        if recipe_payload:
+            macros = recipe_payload.get("macros_per_serving", {}) or {}
+            raw_calories = macros.get("cal", 0) or 0
+            try:
+                actual_calories = float(raw_calories)
+            except (TypeError, ValueError):
+                actual_calories = 0.0
+
+        if meal_summary:
+            total_calories += meal_summary.calories
+
+        expected_calories = adjusted_target * pct
+        calorie_offset = expected_calories - actual_calories
+        adjusted_target += calorie_offset
+
+    return MealPlanResponse(
+        target_calories=original_target,
+        total_calories=total_calories,
+        meals=meals,
+    )

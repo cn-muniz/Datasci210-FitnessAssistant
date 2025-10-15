@@ -14,5 +14,5 @@ COPY server.py ./server.py
 COPY ingest.py  ./ingest.py
 COPY static     ./static
 
-EXPOSE 8000
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8080
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]

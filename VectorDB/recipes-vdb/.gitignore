@@ -2,3 +2,4 @@ data/
 qdrant_storage/
 app_state/
 .env
+*__pycache__*

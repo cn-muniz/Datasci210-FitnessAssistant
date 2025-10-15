@@ -4,14 +4,17 @@ services:
   web:
     build:
       context: ..
-      dockerfile: docker-config/DOCKERFILE
+      dockerfile: docker-config/Dockerfile
     container_name: fitness-app
+    image: fitnessapp-web:latest
     ports:
       - "5001:5000"
     # Mount the current directory to /app in the container
     environment:
-      RECIPE_API_BASE: http://api:8000
+      RECIPE_API_BASE: http://api:8080
       RECIPE_API_KEY: your-token-if-needed
+      FLASK_APP: app.py
+      FLASK_DEBUG: 1
     volumes:
       - ../fitness_app:/app
     command: python app.py
@@ -20,15 +23,19 @@ services:
       context: ../VectorDB/recipes-vdb/app
       dockerfile: Dockerfile
     container_name: recipe-search-app
+    image: fitnessapp-api:latest
     ports:
-      - "8000:8000"
+      - "8080:8080"
     environment:
       QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
       QDRANT_COLLECTION: "recipes"
       QDRANT_API_KEY: "${QDRANT_API_KEY}"
       EMBED_MODEL: "intfloat/e5-base-v2"
       TFIDF_PATH: "/app_state/tfidf.pkl"
+      FLASK_APP: server.py
+      FLASK_DEBUG: 1
     volumes:
-      - ./app_state:/app_state      # persist tfidf.pkl (for hybrid)
-      - ./data:/data                # mount your recipes_tagged.jsonl
+      # - ./app_state:/app_state      # persist tfidf.pkl (for hybrid)
+      # - ./data:/data                # mount your recipes_tagged.jsonl
+      - ../VectorDB/recipes-vdb/app:/app
     restart: unless-stopped
