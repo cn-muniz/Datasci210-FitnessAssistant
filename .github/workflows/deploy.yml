@@ -2,8 +2,8 @@ name: Build & Push Docker Images to ECR
 
 on:
   push:
-    # branches: [ "main" ]
-    branches: [] # disable for now
+    branches: [ "main" ]
+    # branches: [] # disable for now
     paths:
       - "docker-config/**"
       - "fitness_app/**"
@@ -22,12 +22,28 @@ env:
 
 jobs:
   build-and-push:
-    if: ${{ false }}  # disable for now
+    # if: ${{ false }}  # disable for now
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # - name: Checkout
+      #   uses: actions/checkout@v4
+      - name: Set up SSH for submodules
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SUBMODULE_SSH_KEY }}
+
+      - name: Checkout with submodules
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ssh-strict: false   # avoids host key prompt
+
+      - name: Verify submodules
+        run: |
+          git submodule sync --recursive
+          git submodule status --recursive
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
