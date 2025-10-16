@@ -476,10 +476,10 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
         title=recipe_payload.get("title", ""),
         calories=int(_macro_val("cal") + 0.5),
         description=recipe_payload.get("summary"),
-        # instructions=recipe_payload.get("instructions"),
-        # ingredients=recipe_payload.get("ingredients_raw"),
-        # quantities=[q["text"] for q in recipe_payload.get("quantities")],
-        # units=[u["text"] for u in recipe_payload.get("units")], # TODO: Put these back in later
+        instructions=recipe_payload.get("instructions"),
+        ingredients=recipe_payload.get("ingredients_raw"),
+        quantities=[q["text"] for q in recipe_payload.get("quantities")],
+        units=[u["text"] for u in recipe_payload.get("units")],
         query=query,
         macros=MacroSummary(
             protein=f"{int(_macro_val('protein_g') + 0.5)}g",
