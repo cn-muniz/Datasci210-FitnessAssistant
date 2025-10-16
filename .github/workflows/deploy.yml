@@ -22,6 +22,7 @@ env:
 
 jobs:
   build-and-push:
+    if: ${{ false }}  # disable for now
     runs-on: ubuntu-latest
 
     steps:

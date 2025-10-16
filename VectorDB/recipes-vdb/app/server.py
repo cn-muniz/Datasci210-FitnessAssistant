@@ -95,15 +95,19 @@ MEAL_CALORIES_FRAC = {
 app = FastAPI(
     title="Recipe Search (Qdrant Cloud)",
     version="0.6.0",
-    description="""Minimal, web-ready API for dense (and optional hybrid) recipe search over Qdrant.
+    description="""Web-ready API for dense (and optional hybrid) recipe search over Qdrant. Also supports multi-day meal planning using a Cohere LLM to generate meal ideas and then searching for recipes to match.
 
 **Key endpoints**
 - `GET /status` – server readiness
 - `POST /search` – dense/hybrid search returning Top-K
 - `POST /recipes/top` – convenience endpoint that always returns the single top recipe
+- `POST /mealplan/one-day` – generate a one-day meal plan
+- `POST /mealplan/n-day` – generate a multi-day meal plan (1-7 days)
+- `POST /test-chat` – test Cohere LLM chat endpoint
+- `POST /generate-meal-ideas` – generate a multi-day meal plan using LLM to create meal ideas
 
 **Notes**
-- Set environment variables: `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`, `EMBED_MODEL`, `TFIDF_PATH`
+- Set environment variables: `QDRANT_URL`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`, `EMBED_MODEL`, `TFIDF_PATH`, `COHERE_API_KEY`, `COHERE_URL`
 - Exposes a static demo UI at `/`.""",
 )
 app.add_middleware(
