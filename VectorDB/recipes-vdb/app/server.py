@@ -41,7 +41,7 @@ def _get_env_key(env_var: str) -> str:
 QDRANT_URL = os.getenv("QDRANT_URL", "https://YOUR-CLOUD-URL:6333")
 QDRANT_API_KEY = _get_env_key("QDRANT_API_KEY")
 
-COHERE_API_BASE = "https://api.cohere.com/v2/chat"
+COHERE_API_BASE = os.getenv("COHERE_URL", "https://api.cohere.com/v2/chat")
 COHERE_API_KEY = _get_env_key("COHERE_API_KEY")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")

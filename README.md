@@ -35,13 +35,16 @@ docker compose version
 
 Note: Older versions of docker compose use the `docker-compose` syntax.
 
-Once you have ensured that docker and docker compose are installed it is simple to get the `fitness app` and `recipe api` microservices up and running. Before spinning up the docker containers, we need to create an environment variable that contains the Qdrant Cloud API key so that we can access the vectorDB. To do this, navigate to the `docker-config/` directory. Create a file in this directory called `.env`. Open the file and enter the following, but replace the fake API key with your Qdrant API key (reach out to Andrew if you haven't gotten an API key yet).
+Once you have ensured that docker and docker compose are installed it is simple to get the `fitness app` and `recipe api` microservices up and running. Before spinning up the docker containers, we need to create an environment variable that contains the Qdrant Cloud API key so that we can access the vectorDB. To do this, navigate to the `docker-config/` directory. Create a file in this directory called `.env`. Open the file and enter the following, but replace the fake API key with your Qdrant API key (reach out to Andrew if you haven't gotten an API key yet). 
+
+As we integrate with the Cohere LLM, you also need an API key for Cohere. To get this, you will need to create an account and generate an API then copy and paste it into the `.env` file.
 
 <div align="left">
 
 <sub><b>docker-config/.env</b></sub>
 ```bash""
 QDRANT_API_KEY="replace-me-with-your-actual-qdrant-api-key"
+COHERE_API_KEY="replace-me-with-your-actual-cohere-api-key"
 ```
 
 Now that you have your API key defined it can be safely read in as an environment variable in our docker environment. To build and run the docker containers run the following from the `docker-config/` directory.
