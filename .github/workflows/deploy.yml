@@ -26,34 +26,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # - name: Checkout
-      #   uses: actions/checkout@v4
-      # - name: Set up SSH for submodules
-      #   uses: webfactory/ssh-agent@v0.9.0
-      #   with:
-      #     ssh-private-key: ${{ secrets.SUBMODULE_SSH_KEY }}
-
-      # - name: Checkout with submodules
-      #   uses: actions/checkout@v4
-      #   with:
-      #     fetch-depth: 0
-      #     submodules: recursive
-      #     ssh-strict: false   # avoids host key prompt
-
-      - name: Checkout with SSH submodules
+      # 1) Checkout main repo with the default token (HTTPS)
+      - name: Checkout (main repo only)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
-          ssh-key: ${{ secrets.SUBMODULE_SSH_KEY }}  # <- the private key you created
-          persist-credentials: false                 # <- prevents HTTPS auth & rewrite
-          ssh-strict: false                          # avoids host-key prompt on runners
+          submodules: false        # don't fetch submodules here
 
-      - name: Verify submodules
+      # 2) Start ssh-agent with your submodule deploy key (private key)
+      - name: Setup SSH for submodules
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SUBMODULE_SSH_KEY }}
+
+      # 3) Trust GitHub host (avoids interactive host key prompt)
+      - name: Add github.com to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+
+      # 4) Fetch submodules recursively (uses SSH per .gitmodules)
+      - name: Fetch submodules (SSH)
         run: |
           git submodule sync --recursive
+          git submodule update --init --recursive
+
+      # (optional) show status
+      - name: Verify submodules
+        run: |
           git submodule status --recursive
-          git config --global --get-regexp 'url\..*\.insteadOf' || true
+
+      # - name: Verify submodules
+      #   run: |
+      #     git submodule sync --recursive
+      #     git submodule status --recursive
+      #     git config --global --get-regexp 'url\..*\.insteadOf' || true
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
