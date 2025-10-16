@@ -4,7 +4,7 @@ services:
   web:
     build:
       context: ..
-      dockerfile: docker-config/Dockerfile
+      dockerfile: ./docker-config/Dockerfile
     container_name: fitness-app
     image: fitnessapp-web:latest
     ports:
@@ -12,6 +12,7 @@ services:
     # Mount the current directory to /app in the container
     environment:
       RECIPE_API_BASE: http://api:8080
+      # RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com # we can point to deployed API if needed
       RECIPE_API_KEY: your-token-if-needed
       FLASK_APP: app.py
       FLASK_DEBUG: 1
@@ -30,6 +31,7 @@ services:
       QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
       QDRANT_COLLECTION: "recipes"
       QDRANT_API_KEY: "${QDRANT_API_KEY}"
+      COHERE_API_KEY: "${COHERE_API_KEY}"
       EMBED_MODEL: "intfloat/e5-base-v2"
       TFIDF_PATH: "/app_state/tfidf.pkl"
       FLASK_APP: server.py

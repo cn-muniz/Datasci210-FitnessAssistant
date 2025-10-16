@@ -1,4 +1,4 @@
-import os, time, pickle, threading, json
+import os, time, pickle, threading, json, requests
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Body, HTTPException, APIRouter
@@ -16,24 +16,22 @@ from qdrant_client.http.models import (
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
+import logging
+logging.basicConfig(level=logging.INFO)
+import llm_planning  # for meal plan prompt templates
 
 # ---------------- Config ----------------
 
 COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
 
-# def _from_env_or_file(var: str, default=None):
-#     path = os.getenv(f"{var}_FILE")
-#     if path and os.path.exists(path):
-#         return open(path, "r", encoding="utf-8").read().strip()
-#     return os.getenv(var, default)
-def _get_qdrant_key():
-    raw = os.getenv("QDRANT_API_KEY", "").strip()
+def _get_env_key(env_var: str) -> str:
+    raw = os.getenv(env_var, "").strip()
     # handle Secrets Manager key/value JSON or quoted values
     if raw.startswith("{") and ":" in raw:
         try:
             d = json.loads(raw)
             # try common keys
-            for k in ("QDRANT_API_KEY", "api_key", "key"):
+            for k in (env_var, "api_key", "key"):
                 if k in d and isinstance(d[k], str):
                     return d[k].strip().strip('"')
         except Exception:
@@ -41,7 +39,10 @@ def _get_qdrant_key():
     return raw.strip().strip('"')
 
 QDRANT_URL = os.getenv("QDRANT_URL", "https://YOUR-CLOUD-URL:6333")
-QDRANT_API_KEY = _get_qdrant_key()
+QDRANT_API_KEY = _get_env_key("QDRANT_API_KEY")
+
+COHERE_API_BASE = "https://api.cohere.com/v2/chat"
+COHERE_API_KEY = _get_env_key("COHERE_API_KEY")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
@@ -52,8 +53,42 @@ MEAL_PLAN_CONFIG = [
     {"name": "dinner", "calorie_pct": 0.30, "query": "healthy dinner", "meal_tag": "main"},
     {"name": "snack", "calorie_pct": 0.15, "query": "healthy snack", "meal_tag": "snack"},
 ]
-MEAL_PLAN_TOLERANCE = 0.025  # 2.5% wiggle room per course
+MEAL_PLAN_TOLERANCE = 0.05  # 5.0% wiggle room per course
 DIETARY_FLAG_FIELDS = {"vegan", "vegetarian", "pescatarian", "gluten_free", "dairy_free"}
+
+# breakfast, lunch, dinnner
+WEEKLY_PLAN_CONFIG = [
+    # Day 1
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy pancakes", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy salad", "meal_tag": "salad"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "asian rice meal", "meal_tag": "main"}],
+    # Day 2
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy smoothie bowl", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy sandwich", "meal_tag": "main"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "italian pasta meal", "meal_tag": "main"}],
+    # Day 3
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy eggs breakfast", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy soup", "meal_tag": "soup"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "mexican rice meal", "meal_tag": "main"}],
+    # Day 4
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy oatmeal", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy pasta salad", "meal_tag": "salad"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "american comfort food", "meal_tag": "main"}],
+    # Day 5
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy yogurt bowl", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy wrap sandwich", "meal_tag": "main"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "mediterranean meal", "meal_tag": "main"}],
+    # Day 6
+    [{"name": "breakfast", "calorie_pct": 0.3, "query": "healthy avocado toast", "meal_tag": "breakfast"},
+    {"name": "lunch", "calorie_pct": 0.3, "query": "easy grain bowl", "meal_tag": "salad"},
+    {"name": "dinner", "calorie_pct": 0.4, "query": "indian curry meal", "meal_tag": "main"}],
+]
+
+MEAL_CALORIES_FRAC = {
+    "breakfast": 0.3,
+    "lunch": 0.3,
+    "dinner": 0.4,
+}
 
 # --------------- App setup ---------------
 
@@ -217,23 +252,86 @@ class MealSummary(BaseModel):
     quantities: Optional[List[str]] = None
     units: Optional[List[str]] = None
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
+    query: Optional[str] = Field(None, description="The search query used to find this recipe")
 
 class MealPlanRequest(BaseModel):
     caloric_target: float = Field(..., gt=0, description="Desired total calories for the day")
     dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']")
+    preferences: Optional[str] = Field(None, description="Free-text preferences to influence meal selection")
+    exclusions: Optional[str] = Field(None, description="Free-text ingredients or tags to avoid")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "caloric_target": 2750,
-                "dietary": ["vegetarian", "dairy_free"]
+                "dietary": ["vegetarian", "dairy_free"],
+                "preferences": "high protein, low carb",
+                "exclusions": "peanuts, mushrooms"
             }
         }
 
 class MealPlanResponse(BaseModel):
+    day: Optional[int] = Field(None, description="Day number in multi-day plan, if applicable")
     target_calories: float
     total_calories: float
     meals: List[Optional[MealSummary]]
+
+class NDayPlanRequest(BaseModel):
+    # caloric target, dietary flags, preferences, exclusions
+    target_calories: float = Field(..., gt=0, description="Desired total calories for the day")
+    dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']")
+    num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
+    limit_per_meal: int = Field(5, ge=1, le=20, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
+    preferences: Optional[str] = Field(None, description="Free-text preferences to influence meal selection")
+    exclusions: Optional[str] = Field(None, description="Free-text ingredients or tags to avoid")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "target_calories": 2500,
+                "dietary": ["vegetarian"],
+                "num_days": 7,
+                "limit_per_meal": 1,
+                "preferences": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chickpeas or broccoli",
+                "exclusions": "peanuts, mushrooms"
+            }
+        }
+
+class NDayPlanResponse(BaseModel):
+    daily_plans: List[MealPlanResponse]
+
+class TestChatRequest(BaseModel):
+    messages: Any = Field(..., description="Single string or list of message parts to send to the LLM")
+    model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "messages": [
+                    {"role": "user", "content": "Generate a three brief meal ideas: one breakfast, one lunch, one dinner."}
+                ],
+                "model": "command-a-03-2025"
+            }
+        }
+
+class TestChatResponse(BaseModel):
+    response: str
+
+class GenerateMealIdeasRequest(BaseModel):
+    user_input: str = Field(..., description="User input describing meal preferences")
+    num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
+    model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_input": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chicken or fish",
+                "num_days": 2,
+                "model": "command-a-03-2025"
+            }
+        }
+
+class GenerateMealIdeasResponse(BaseModel):
+    plan_meta: Optional[Dict[str, Any]] = None
+    days: Optional[List[Dict[str, Any]]] = None
 
 # --------------- Helpers -----------------
 
@@ -328,6 +426,7 @@ def _core_search(payload: RecipeSearchRequest, force_limit: Optional[int] = None
         COLLECTION, query_vector=("text_embedding", qvec),
         query_filter=flt, limit=search_limit, with_payload=True
     )
+    logging.info(f"Dense search found {len(d_hits)} hits")
 
     use_sparse = payload.hybrid and bool(STATE["sparse_enabled"])
     if use_sparse:
@@ -350,12 +449,13 @@ def _core_search(payload: RecipeSearchRequest, force_limit: Optional[int] = None
     else:
         results = [h.payload for h in d_hits[: (force_limit or payload.limit)]]
 
+    logging.info(f"Returning {len(results)} results (hybrid={use_sparse})")
     return SearchResponse(hybrid_used=use_sparse, count=len(results), results=results)
 
 def _dietary_kwargs(dietary: List[str]) -> Dict[str, bool]:
     return {flag: True for flag in dietary if flag in DIETARY_FLAG_FIELDS}
 
-def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str) -> Optional[MealSummary]:
+def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str, query: str) -> Optional[MealSummary]:
     if not recipe_payload:
         return None
 
@@ -372,16 +472,32 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
         title=recipe_payload.get("title", ""),
         calories=int(_macro_val("cal") + 0.5),
         description=recipe_payload.get("summary"),
-        instructions=recipe_payload.get("instructions"),
-        ingredients=recipe_payload.get("ingredients_raw"),
-        quantities=[q["text"] for q in recipe_payload.get("quantities")],
-        units=[u["text"] for u in recipe_payload.get("units")],
+        # instructions=recipe_payload.get("instructions"),
+        # ingredients=recipe_payload.get("ingredients_raw"),
+        # quantities=[q["text"] for q in recipe_payload.get("quantities")],
+        # units=[u["text"] for u in recipe_payload.get("units")], # TODO: Put these back in later
+        query=query,
         macros=MacroSummary(
             protein=f"{int(_macro_val('protein_g') + 0.5)}g",
             carbs=f"{int(_macro_val('carbs_g') + 0.5)}g",
             fat=f"{int(_macro_val('fat_g') + 0.5)}g",
         ),
     )
+
+def _cohere_chat(messages, model="command-a-03-2025"):
+    url = COHERE_API_BASE
+    # headers = {"Authorization": f"Bearer {COHERE_API_KEY}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {COHERE_API_KEY}"}
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": False
+    }
+    r = requests.post(url, json=payload, headers=headers, timeout=45)
+    r.raise_for_status()
+    # Cohere v2 chat returns a "message" with "content" parts; join text parts:
+    parts = r.json()["message"]["content"]
+    return "".join(p.get("text", "") for p in parts)
 
 # --------------- Endpoints ----------------
 
@@ -412,12 +528,12 @@ def top_recipe(payload: RecipeSearchRequest = Body(...)):
     return _core_search(payload, force_limit=1)
 
 @app.post(
-    "/meal-plan",
+    "/meal-planning/one-day",
     response_model=MealPlanResponse,
-    tags=["Meal Plan"],
+    tags=["Meal Planning"],
     summary="Generate a one-day meal plan using caloric target and dietary restrictions",
 )
-def meal_plan(payload: MealPlanRequest = Body(...)):
+def one_day(payload: MealPlanRequest = Body(...)):
     """Return a simple four-meal day (breakfast, lunch, dinner, snack) tailored to calorie target + diet flags."""
     _assert_ready()
 
@@ -429,6 +545,16 @@ def meal_plan(payload: MealPlanRequest = Body(...)):
     total_calories = 0.0
 
     for cfg in MEAL_PLAN_CONFIG:
+        # Add free-text preferences/exclusions to the query
+        base_query = cfg["query"]
+        if payload.preferences:
+            base_query += " preferring: (" + payload.preferences + ")"
+        # TODO:  We will eventually handle exclusions with the LLM filtering things out
+        if payload.exclusions:
+            base_query += " excluding (" + payload.exclusions + ")"
+
+        logging.info(f"Meal '{cfg['name']}' query: {base_query}")
+
         pct = cfg["calorie_pct"]
         cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
         cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
@@ -444,7 +570,7 @@ def meal_plan(payload: MealPlanRequest = Body(...)):
 
         search_response = _core_search(request_payload, force_limit=1)
         recipe_payload = search_response.results[0] if search_response.results else None
-        meal_summary = _format_meal_result(recipe_payload, cfg["name"])
+        meal_summary = _format_meal_result(recipe_payload, cfg["name"], cfg["query"])
         meals.append(meal_summary)
 
         actual_calories = 0.0
@@ -469,28 +595,179 @@ def meal_plan(payload: MealPlanRequest = Body(...)):
         meals=meals,
     )
 
-# For Debugging / Diagnostics
-diag = APIRouter()
+@app.post(
+    "/meal-planning/n-day",
+    response_model=NDayPlanResponse,
+    tags=["Meal Planning"],
+    summary="Generate a n-day meal plan using caloric target and dietary restrictions",
+)
+def n_day(payload: NDayPlanRequest = Body(...)):
+    """Return a simple four-meal day (breakfast, lunch, dinner, snack) tailored to calorie target + diet flags."""
+    _assert_ready()
 
-@diag.get("/_diag/env")
-def diag_env():
-    v = os.getenv("QDRANT_API_KEY", "")
-    return {
-        "QDRANT_URL": QDRANT_URL,
-        "QDRANT_COLLECTION": COLLECTION,
-        "QDRANT_API_KEY_present": bool(v),
-        "QDRANT_API_KEY_len": len(v or ""),
-        "QDRANT_API_KEY_is_json": (v.strip().startswith("{") if v else False),
-        "QDRANT_API_KEY_sample": (v.strip()[:4] + "..." + v.strip()[-4:] if v else ""),
-    }
+    original_target = float(payload.target_calories)
+    adjusted_target = float(payload.target_calories)
+    dietary_kwargs = _dietary_kwargs(payload.dietary)
 
-@diag.get("/_diag/qdrant")
-def diag_qdrant():
+    # First generate the n-day plan using the LLM
+    if payload.num_days < 1 or payload.num_days > 7:
+        raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 7"})
+    generate_meal_ideas_request = GenerateMealIdeasRequest(
+        user_input=payload.preferences or "balanced meals",
+        num_days=payload.num_days,
+        model="command-a-03-2025"
+    )
+    
+    meal_config = generate_meal_ideas(generate_meal_ideas_request)
+    logging.info(f"LLM meal plan config: {meal_config}")
+
+    # weekly plan
+    daily_plans: List[MealPlanResponse] = []
+
+    meal_keys = ["breakfast", "lunch", "dinner"]
+
+    for day_cfg in meal_config.days:
+        daily_meals: List[Optional[MealSummary]] = []
+        total_calories = 0.0
+        for meal_key in meal_keys:
+            query = day_cfg[meal_key]["query"]
+            meal_tag = day_cfg[meal_key]["meal_tag"]
+
+            logging.info(f"Meal '{meal_key}' query: {query} tag: {meal_tag}")
+
+            pct = MEAL_CALORIES_FRAC[meal_key]
+            cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
+            cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
+
+            limit = payload.limit_per_meal
+            request_payload = RecipeSearchRequest(
+                query=query,
+                limit=limit,
+                meal_tag=meal_tag,
+                cal_min=cal_min,
+                cal_max=cal_max,
+                **dietary_kwargs,
+            )
+            search_response = _core_search(request_payload, force_limit=limit)
+
+            # Pick a random recipe from the top-N to add variety
+            recipe_payload = search_response.results[0] if search_response.results else None
+            logging.info(f"  Found {search_response.count} results")
+            if limit > 1 and len(search_response.results) > 1:
+                import random
+                recipe_payload = random.choice(search_response.results)
+
+            meal_summary = _format_meal_result(recipe_payload, meal_key, query)
+            daily_meals.append(meal_summary)
+
+            actual_calories = 0.0
+            if recipe_payload:
+                macros = recipe_payload.get("macros_per_serving", {}) or {}
+                raw_calories = macros.get("cal", 0) or 0
+                try:
+                    actual_calories = float(raw_calories)
+                except (TypeError, ValueError):
+                    actual_calories = 0.0
+
+            if meal_summary:
+                total_calories += meal_summary.calories
+
+            expected_calories = adjusted_target * pct
+            calorie_offset = expected_calories - actual_calories
+            adjusted_target += calorie_offset
+
+        daily_plans.append(MealPlanResponse(
+            day=len(daily_plans) + 1,
+            target_calories=original_target,
+            total_calories=total_calories,
+            meals=daily_meals,
+        ))
+
+    return NDayPlanResponse(daily_plans=daily_plans)
+
+# LLM test endpoint
+@app.post(
+    "/test-chat",
+    response_model=TestChatResponse,
+    tags=["Chat LLM"],
+    summary="Test call to Cohere chat LLM",
+)
+def test_chat(payload: TestChatRequest = Body(...)):
+    """Test call to Cohere chat LLM."""
+    if not COHERE_API_KEY:
+        raise HTTPException(status_code=503, detail={"message": "Cohere API key not configured"})
     try:
-        # lightweight auth probe
-        r = client.get_collection(COLLECTION)
-        return {"ok": True, "collection": COLLECTION}
+        resp = _cohere_chat(payload.messages, model=payload.model or "command-r-plus")
+        return TestChatResponse(response=resp)
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
+    
+# Meal ideas generation endpoint
+@app.post(
+    "/generate-meal-ideas",
+    response_model=GenerateMealIdeasResponse,
+    tags=["Chat LLM"],
+    summary="Generate meal ideas using Cohere chat LLM",
+)
+def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
+    """Generate meal ideas using Cohere chat LLM."""
+    # We want a nicely formatted list of json objects that each have a query and meal_tag
+    if not COHERE_API_KEY:
+        raise HTTPException(status_code=503, detail={"message": "Cohere API key not configured"})
+    # Use llm_planning module for prompt templates
+    prompt = llm_planning.build_messages(payload.num_days, payload.user_input, include_few_shots=False)
+    for item in prompt:
+        logging.info(item) # Need to keep this short for Cohere
+    logging.info(f"Generated prompt: {prompt}")
 
-app.include_router(diag)
+    # Call the LLM
+    try:
+        resp = _cohere_chat(prompt, model=payload.model or "command-a-03-2025")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
+    logging.info(f"LLM response: {resp}")
+    # Basic test for now
+    # resp = "{\n  \"plan_meta\": {\n    \"days\": 2,\n    \"notes\": \"Mix of pancakes and oatmeal for breakfast, salads for lunch, and hearty chicken or fish dinners.\"\n  },\n  \"days\": [\n    {\n      \"day\": 1,\n      \"breakfast\": {\n        \"title\": \"Blueberry Pancakes\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"fluffy blueberry pancakes breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Grilled Chicken Caesar Salad\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"grilled chicken caesar salad lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Baked Salmon with Roasted Vegetables\",\n        \"meal_tag\": \"main\",\n        \"query\": \"baked salmon roasted vegetables hearty dinner\"\n      }\n    },\n    {\n      \"day\": 2,\n      \"breakfast\": {\n        \"title\": \"Apple Cinnamon Oatmeal\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"apple cinnamon oatmeal breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Greek Salad with Feta\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"greek salad feta lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Lemon Herb Roasted Chicken\",\n        \"meal_tag\": \"main\",\n        \"query\": \"lemon herb roasted chicken hearty dinner\"\n      }\n    }\n  ]\n}"
+
+    # Validate the LLM response
+    valid,format_resp,errors = llm_planning.parse_and_validate_output(resp, payload.num_days)
+
+    if len(errors) > 0:
+        logging.warning(f"LLM response parse/validation errors: {errors}")
+    if not valid:
+        raise HTTPException(status_code=500, detail={"message": f"LLM response format invalid: {format_resp}"})
+    logging.info(f"LLM response parsed OK: {format_resp}")    
+
+    # return the formatted response
+    return GenerateMealIdeasResponse(
+        plan_meta=format_resp.get("plan_meta"),
+        days=format_resp.get("days"),
+    )
+
+    
+
+# For Debugging / Diagnostics
+# diag = APIRouter()
+
+# @diag.get("/_diag/env")
+# def diag_env():
+#     v = os.getenv("QDRANT_API_KEY", "")
+#     return {
+#         "QDRANT_URL": QDRANT_URL,
+#         "QDRANT_COLLECTION": COLLECTION,
+#         "QDRANT_API_KEY_present": bool(v),
+#         "QDRANT_API_KEY_len": len(v or ""),
+#         "QDRANT_API_KEY_is_json": (v.strip().startswith("{") if v else False),
+#         "QDRANT_API_KEY_sample": (v.strip()[:4] + "..." + v.strip()[-4:] if v else ""),
+#     }
+
+# @diag.get("/_diag/qdrant")
+# def diag_qdrant():
+#     try:
+#         # lightweight auth probe
+#         r = client.get_collection(COLLECTION)
+#         return {"ok": True, "collection": COLLECTION}
+#     except Exception as e:
+#         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+# app.include_router(diag)
