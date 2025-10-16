@@ -121,6 +121,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 def index():
     return FileResponse("static/index.html")
 
+
+@app.get("/meal-planner", tags=["UI"])
+def meal_planner_ui():
+    return FileResponse("static/n_day_planner.html")
+
 # -------------- Global state --------------
 
 STATE: Dict[str, Any] = {

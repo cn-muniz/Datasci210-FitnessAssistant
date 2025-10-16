@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>N-Day Meal Planner</title>
+  <link rel="stylesheet" href="/static/n_day_planner.css" />
+</head>
+<body>
+  <div class="planner-shell">
+    <header class="planner-header">
+      <div class="title-block">
+        <div class="title-icon" aria-hidden="true">🗓️</div>
+        <div>
+          <h1>N-Day Meal Planner</h1>
+          <p>Create a multi-day plan powered by the /meal-planning/n-day API.</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="expand-all" class="btn ghost" type="button" disabled>Expand all</button>
+        <button id="collapse-all" class="btn ghost" type="button" disabled>Collapse all</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <form id="planner-form" class="planner-form">
+        <div class="form-row">
+          <label for="target-calories">Target calories</label>
+          <input id="target-calories" name="target_calories" type="number" min="400" max="6000" step="50" required placeholder="e.g., 2200" />
+        </div>
+
+        <div class="form-row">
+          <span class="label">Dietary restrictions</span>
+          <div class="dietary-grid">
+            <label class="chip">
+              <input type="checkbox" value="vegetarian" name="dietary" />
+              <span>Vegetarian</span>
+            </label>
+            <label class="chip">
+              <input type="checkbox" value="vegan" name="dietary" />
+              <span>Vegan</span>
+            </label>
+            <label class="chip">
+              <input type="checkbox" value="pescatarian" name="dietary" />
+              <span>Pescatarian</span>
+            </label>
+            <label class="chip">
+              <input type="checkbox" value="gluten_free" name="dietary" />
+              <span>Gluten-free</span>
+            </label>
+            <label class="chip">
+              <input type="checkbox" value="dairy_free" name="dietary" />
+              <span>Dairy-free</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="limit-per-meal">Limit per meal (number of candidate recipes before selection)</label>
+            <input id="limit-per-meal" name="limit_per_meal" type="number" min="1" max="20" value="3" required />
+          </div>
+          <div class="form-row">
+            <label for="num-days">Number of days</label>
+            <input id="num-days" name="num_days" type="number" min="1" max="7" value="3" required />
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label for="preferences">Preferences / brief</label>
+          <textarea id="preferences" name="preferences" rows="3" placeholder="Describe the meals or goals you have in mind. Example: I want easy oatmeal or smoothie recipes for breakfast, salads or sandwiches for lunch, and pasta or American food for dinner"></textarea>
+        </div>
+
+        <div class="form-actions">
+          <button id="generate-btn" class="btn primary" type="submit">Generate meal plan</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="results" class="card results hidden" aria-live="polite">
+      <p id="results-hint" class="results-hint">Fill in the form above and choose “Generate meal plan” to see results.</p>
+      <div id="results-list" class="results-list"></div>
+    </section>
+  </div>
+
+  <script src="/static/n_day_planner.js"></script>
+</body>
+</html>
