@@ -288,9 +288,9 @@ class MealPlanResponse(BaseModel):
 class NDayPlanRequest(BaseModel):
     # caloric target, dietary flags, preferences, exclusions
     target_calories: float = Field(..., gt=0, description="Desired total calories for the day")
-    target_protein: Optional[float] = Field(..., gt=0, description="Desired total protein for the day")
-    target_fat: Optional[float] = Field(..., gt=0, description="Desired total fat for the day")
-    target_carbs: Optional[float] = Field(..., gt=0, description="Desired total carbs for the day")
+    target_protein: Optional[float] = Field(default=None, gt=0, description="Desired total protein for the day")
+    target_fat: Optional[float] = Field(default=None, gt=0, description="Desired total fat for the day")
+    target_carbs: Optional[float] = Field(default=None, gt=0, description="Desired total carbs for the day")
     dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']")
     num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
     limit_per_meal: int = Field(5, ge=1, le=20, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
