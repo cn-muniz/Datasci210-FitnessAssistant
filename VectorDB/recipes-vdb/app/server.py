@@ -423,12 +423,14 @@ class GenerateMealIdeasRequest(BaseModel):
     user_input: str = Field(..., description="User input describing meal preferences")
     num_days: int = Field(..., ge=1, le=14, description="Number of days to plan for (1-14)")
     model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
+    dietary: Optional[list[str]] = Field(None, description="List of dietary flags, e.g. ['gluten_free']. Options are 'vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'pescetarian'")
     class Config:
         json_schema_extra = {
             "example": {
                 "user_input": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chicken or fish",
                 "num_days": 2,
-                "model": "command-a-03-2025"
+                "model": "command-a-03-2025",
+                "dietary": ["vegetarian"]
             }
         }
 
@@ -744,7 +746,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     generate_meal_ideas_request = GenerateMealIdeasRequest(
         user_input=payload.preferences or "balanced meals",
         num_days=payload.num_days,
-        model="command-a-03-2025"
+        model="command-a-03-2025",
+        dietary=payload.dietary
     )
     
     meal_config = generate_meal_ideas(generate_meal_ideas_request)
@@ -843,8 +846,24 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
     # We want a nicely formatted list of json objects that each have a query and meal_tag
     if not COHERE_API_KEY:
         raise HTTPException(status_code=503, detail={"message": "Cohere API key not configured"})
+    user_input = payload.user_input
+    dietary_flags = [flag for flag in (payload.dietary or []) if flag]
+    readable_flags = [flag.replace("_", " ").strip() for flag in dietary_flags]
+    if readable_flags:
+        user_input += (
+            " Make sure all queries adhere to the following diet keys: "
+            + ", ".join(readable_flags)
+            + "."
+        )
     # Use llm_planning module for prompt templates
-    prompt = llm_planning.build_messages(payload.num_days, payload.user_input, include_few_shots=False)
+    # prompt = llm_planning.build_messages(payload.num_days, payload.user_input, include_few_shots=False)
+    prompt = llm_planning.build_messages(payload.num_days, user_input, include_few_shots=False)
+    if readable_flags and prompt and prompt[0].get("role") == "system":
+        prompt[0]["content"] = (
+            f"{prompt[0]['content']}\n\nDietary constraints to enforce: "
+            + ", ".join(readable_flags)
+            + "."
+        )
     for item in prompt:
         logging.info(item) # Need to keep this short for Cohere
     logging.info(f"Generated prompt: {prompt}")
@@ -891,7 +910,8 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
     generate_meal_ideas_request = GenerateMealIdeasRequest(
         user_input=payload.preferences or "balanced meals",
         num_days = payload.queries_per_meal,
-        model="command-a-03-2025" # TODO: Make this an environment variable
+        model="command-a-03-2025", # TODO: Make this an environment variable
+        dietary=payload.dietary
     )
 
     meal_config = generate_meal_ideas(generate_meal_ideas_request)
