@@ -344,7 +344,7 @@ class NDayRecipesRequest(BaseModel):
     dinner_targets: MealMacroTargets = Field(DINNER_MACRO_DEFAULT, description="Defines the macro targets for dinner meals as a percentage of daily target macros")
     dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']. Options are 'vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'pescetarian'")
     num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
-    queries_per_meal: int = Field(2, ge=1, le=7, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
+    queries_per_meal: int = Field(2, ge=1, le=14, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
     candidate_recipes: int = Field(50, ge=3, le=100, description="The maximum number of total candidate recipes to be returned")
     preferences: Optional[str] = Field(None, description="Free-text preferences to influence meal selection")
     exclusions: Optional[str] = Field(None, description="Free-text ingredients or tags to avoid")
@@ -358,20 +358,20 @@ class NDayRecipesRequest(BaseModel):
                 "target_carbs": 200,
                 "breakfast_targets": {
                     "macro_target_pct": 30,
-                    "macro_tolerance_pct": 5
+                    "macro_tolerance_pct": 10
                 },
                 "lunch_targets": {
                     "macro_target_pct": 30,
-                    "macro_tolerance_pct": 5
+                    "macro_tolerance_pct": 10
                 },
                 "dinner_targets": {
-                    "macro_target_pct": 30,
-                    "macro_tolerance_pct": 5
+                    "macro_target_pct": 40,
+                    "macro_tolerance_pct": 10
                 },
                 "dietary": ["vegetarian"],
                 "num_days": 7,
-                "queries_per_meal": 2,
-                "candidate_recipes": 50, 
+                "queries_per_meal": 7,
+                "candidate_recipes": 42, 
                 "preferences": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chickpeas or broccoli",
                 "exclusions": "peanuts, mushrooms"
             }
@@ -392,10 +392,16 @@ class MealForLlm(BaseModel):
     units: Optional[List[str]] = None
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
 
+class MealCounts(BaseModel):
+    breakfast: int = 0
+    lunch: int = 0
+    dinner: int = 0
+
 class NDayRecipesResponse(BaseModel):
     candidate_recipes: List[MealForLlm] = Field(None, description="A list of candidate recipes returned from the vectorDB")
     original_request: NDayRecipesRequest = Field(None, description="Pass through of the request")
     queries: List[Optional[str]] = Field(None, description="List of dense text queries used in vectorDB search")
+    meal_counts: MealCounts = Field(None, description="Number of breakfast, lunch, and dinner candidates returned")
 
 class TestChatRequest(BaseModel):
     messages: Any = Field(..., description="Single string or list of message parts to send to the LLM")
@@ -415,7 +421,7 @@ class TestChatResponse(BaseModel):
 
 class GenerateMealIdeasRequest(BaseModel):
     user_input: str = Field(..., description="User input describing meal preferences")
-    num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
+    num_days: int = Field(..., ge=1, le=14, description="Number of days to plan for (1-14)")
     model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
     class Config:
         json_schema_extra = {
@@ -877,8 +883,8 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
 def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
     """Generate meal ideas using Cohere chat LLM."""
     # First generate the n-day plan using the LLM
-    if payload.num_days < 1 or payload.num_days > 7:
-        raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 7"})
+    if payload.num_days < 1 or payload.num_days > 14:
+        raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 14"})
     
     dietary_kwargs = _dietary_kwargs(payload.dietary)
 
@@ -903,7 +909,16 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
         "dinner": payload.dinner_targets
     }
 
-    meal_keys = ["breakfast", "lunch", "dinner"]
+    # Keep separate lists for each query before collapsing into a single list
+    # Nest this under breakfast, lunch, and dinner so we can keep about the same number
+    # of candidates for each meal
+    nested_candidates = {
+        "breakfast": {},
+        "lunch": {},
+        "dinner": {}
+    }
+
+    meal_keys = list(nested_candidates.keys())
     for day_cfg in meal_config.days:
         for meal_key in meal_keys:
             query = day_cfg[meal_key]["query"]
@@ -940,14 +955,62 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             for recipe_payload in search_response.results:
                 formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key)
                 logging.info(formatted_recipe)
-                recipes_list.append(formatted_recipe)
+                # recipes_list.append(formatted_recipe)
+                recipe_list_key = f"{day_cfg["day"]}"
+                if recipe_list_key not in list(nested_candidates[meal_key].keys()):
+                    nested_candidates[meal_key][recipe_list_key] = []
+                nested_candidates[meal_key][recipe_list_key].append(formatted_recipe)
 
             queries_list.append(query)
+    
+    # TODO: Add a reranker that takes into account exclusions
+
+    total_candidates = 0
+    meal_counts = {
+        "breakfast": 0,
+        "lunch": 0,
+        "dinner": 0
+    }
+    for meal,query_dict in nested_candidates.items():
+        for query,query_list in query_dict.items():
+            total_candidates += len(query_list)
+            meal_counts[meal] += len(query_list)
+    
+    logging.info(f"total_candidates: {total_candidates} desired candidates: {payload.candidate_recipes}")
+    while total_candidates > payload.candidate_recipes:
+        logging.info(meal_counts)
+        # Get the meal with the most recipes
+        max_meal = max(meal_counts,key=meal_counts.get)
+        logging.info(f"max meal: {max_meal}")
+
+        # Get the query with the most recipes for the max meal
+        max_query = max(nested_candidates[max_meal],key=lambda k: len(nested_candidates[max_meal][k]))
+        logging.info(f"max query: {max_meal}")
+
+        # Trim the list from the end by 1
+        nested_candidates[max_meal][max_query] = nested_candidates[max_meal][max_query][:-1]
+        total_candidates -= 1
+        meal_counts[max_meal] -= 1
+
+    # Print a summary of the meal counts and collapse into a final candidates list
+    meal_counts = {
+        "breakfast": 0,
+        "lunch": 0,
+        "dinner": 0
+    }
+    for meal,query_dict in nested_candidates.items():
+        for query,query_list in query_dict.items():
+            meal_counts[meal] += len(query_list)
+            for recipe in query_list:
+                recipes_list.append(recipe)
+    logging.info(meal_counts)
+    logging.info(f"Total candidate recipes: {len(recipes_list)}")
 
     return NDayRecipesResponse(
         candidate_recipes=recipes_list,
         original_request=payload,
-        queries=queries_list
+        queries=queries_list,
+        meal_counts=MealCounts(**meal_counts)
     )
 
 

@@ -61,13 +61,13 @@ Output schema (strict)
       "day": 1,
       "breakfast": { "title": "...", "meal_tag": "breakfast", "query": "..." },
       "lunch":     { "title": "...", "meal_tag": "salad|soup|main", "query": "..." },
-      "dinner":    { "title": "...", "meal_tag": "main", "query": "..." }
+      "dinner":    { "title": "...", "meal_tag": "salad|soup|main", "query": "..." }
     }
   ]
 }
 
 Validation
-- Reject any lunch meal_tag not in {salad, soup, main}.
+- Reject any lunch or dinner meal_tag not in {salad, soup, main}.
 - Enforce exactly days = n in plan_meta.days and number of day objects.
 - query must be general (e.g., "high protein vegetarian tofu scramble"), with no brand names or links.
 
@@ -508,8 +508,8 @@ def validate_plan(plan: Dict[str, Any], n_expected: int) -> List[str]:
                     errors.append(f'days[{i}].breakfast.meal_tag must equal "breakfast" (found "{meal_tag}").')
                 if meal == "lunch" and meal_tag not in {"salad", "soup", "main"}:
                     errors.append(f'days[{i}].lunch.meal_tag must be one of "salad", "soup", "main" (found "{meal_tag}").')
-                if meal == "dinner" and meal_tag != "main":
-                    errors.append(f'days[{i}].dinner.meal_tag must equal "main" (found "{meal_tag}").')
+                if meal == "dinner" and meal_tag not in {"salad", "soup", "main"}:
+                    errors.append(f'days[{i}].dinner.meal_tag must be one of "salad", "soup", "main" (found "{meal_tag}").')
 
             if not _is_nonempty_string(query):
                 errors.append(f'days[{i}].{meal}.query must be a non-empty string.')
