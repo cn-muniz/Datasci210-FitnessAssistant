@@ -315,6 +315,88 @@ class NDayPlanRequest(BaseModel):
 class NDayPlanResponse(BaseModel):
     daily_plans: List[MealPlanResponse]
 
+# class MacroTargets(BaseModel):
+#     calorie_max_pct: float = Field(..., gt=0, description="Maximum calories for a meal as a percentage of the daily target calories")
+#     calorie_min_pct: float = Field(..., gt=0, description="Minimum calories for a meal as a percentage of the daily target calories")
+#     protein_max_pct: float = Field(..., gt=0, description="Maximum protein for a meal as a percentage of the daily target protein")
+#     protein_min_pct: float = Field(..., gt=0, description="Minimum protein for a meal as a percentage of the daily target protein")
+#     fat_max_pct: float = Field(..., gt=0, description="Maximum fat for a meal as a percentage of the daily target fat")
+#     fat_min_pct: float = Field(..., gt=0, description="Minimum fat for a meal as a percentage of the daily target fat")
+#     carb_max_pct: float = Field(..., gt=0, description="Maximum carb for a meal as a percentage of the daily target carb")
+#     carb_min_pct: float = Field(..., gt=0, description="Minimum carb for a meal as a percentage of the daily target carb")
+
+class MealMacroTargets(BaseModel):
+    macro_target_pct: float = Field(30, gt=0, description="Target macros for an individual meal as a percentage of the target macros.")
+    macro_tolerance_pct: float = Field(5, gt=0, description="Individual meal macro tolerance as a percentage. Works in combination with the macro_target_pct. Final macro range is macro_target*(macro_target_pct +/- macro_tolerance_pct)/100.0")
+
+BREAKFAST_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=30.0, macro_tolerance_pct=5.0)
+LUNCH_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=30.0, macro_tolerance_pct=5.0)
+DINNER_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=40.0, macro_tolerance_pct=5.0)
+
+class NDayRecipesRequest(BaseModel):
+    # caloric target, dietary flags, preferences, exclusions
+    target_calories: float = Field(2500, gt=0, description="Desired total calories for the day")
+    target_protein: float = Field(100, gt=0, description="Desired total protein for the day")
+    target_fat: float = Field(60, gt=0, description="Desired total fat for the day")
+    target_carbs: float = Field(200, gt=0, description="Desired total carbs for the day")
+    breakfast_targets: MealMacroTargets = Field(BREAKFAST_MACRO_DEFAULT, description="Defines the macro targets for breakfast meals as a percentage of daily target macros")
+    lunch_targets: MealMacroTargets = Field(LUNCH_MACRO_DEFAULT, description="Defines the macro targets for lunch meals as a percentage of daily target macros")
+    dinner_targets: MealMacroTargets = Field(DINNER_MACRO_DEFAULT, description="Defines the macro targets for dinner meals as a percentage of daily target macros")
+    dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']. Options are 'vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'pescetarian'")
+    num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
+    queries_per_meal: int = Field(2, ge=1, le=7, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
+    candidate_recipes: int = Field(50, ge=3, le=100, description="The maximum number of total candidate recipes to be returned")
+    preferences: Optional[str] = Field(None, description="Free-text preferences to influence meal selection")
+    exclusions: Optional[str] = Field(None, description="Free-text ingredients or tags to avoid")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "target_calories": 2500,
+                "target_protein": 100,
+                "target_fat": 60,
+                "target_carbs": 200,
+                "breakfast_targets": {
+                    "macro_target_pct": 30,
+                    "macro_tolerance_pct": 5
+                },
+                "lunch_targets": {
+                    "macro_target_pct": 30,
+                    "macro_tolerance_pct": 5
+                },
+                "dinner_targets": {
+                    "macro_target_pct": 30,
+                    "macro_tolerance_pct": 5
+                },
+                "dietary": ["vegetarian"],
+                "num_days": 7,
+                "queries_per_meal": 2,
+                "candidate_recipes": 50, 
+                "preferences": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chickpeas or broccoli",
+                "exclusions": "peanuts, mushrooms"
+            }
+        }
+
+class MealForLlm(BaseModel):
+    title: str
+    calories: float
+    protein_g: float
+    fat_g: float
+    carbs_g: float
+    # TODO: Add sodium??
+
+    description: Optional[str] = None
+    instructions: Optional[str] = None
+    ingredients: Optional[List[str]] = None
+    quantities: Optional[List[str]] = None
+    units: Optional[List[str]] = None
+    meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
+
+class NDayRecipesResponse(BaseModel):
+    candidate_recipes: List[MealForLlm] = Field(None, description="A list of candidate recipes returned from the vectorDB")
+    original_request: NDayRecipesRequest = Field(None, description="Pass through of the request")
+    queries: List[Optional[str]] = Field(None, description="List of dense text queries used in vectorDB search")
+
 class TestChatRequest(BaseModel):
     messages: Any = Field(..., description="Single string or list of message parts to send to the LLM")
     model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
@@ -497,6 +579,32 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
             carbs=f"{int(_macro_val('carbs_g') + 0.5)}g",
             fat=f"{int(_macro_val('fat_g') + 0.5)}g",
         ),
+    )
+
+def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type: str) -> Optional[MealSummary]:
+    if not recipe_payload:
+        return None
+
+    macros = recipe_payload.get("macros_per_serving", {}) or {}
+    def _macro_val(key: str) -> float:
+        val = macros.get(key, 0) or 0
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return MealForLlm(
+        title=recipe_payload.get("title", ""),
+        calories=_macro_val("cal"),
+        protein_g=_macro_val("protein_g"),
+        fat_g=_macro_val("fat_g"),
+        carbs_g=_macro_val("carbs_g"),
+        description=recipe_payload.get("summary"),
+        instructions=recipe_payload.get("instructions"),
+        ingredients=recipe_payload.get("ingredients_raw"),
+        quantities=[q["text"] for q in recipe_payload.get("quantities")],
+        units=[u["text"] for u in recipe_payload.get("units")],
+        meal_type=meal_type,
     )
 
 def _cohere_chat(messages, model="command-a-03-2025"):
@@ -758,6 +866,92 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
         plan_meta=format_resp.get("plan_meta"),
         days=format_resp.get("days"),
     )
+
+# Candidate recipe collection endpoint
+@app.post(
+    "/get-candidate-recipes",
+    response_model=NDayRecipesResponse,
+    tags=["Chat LLM"],
+    summary="Generate unique text dense queries for vectorDB and return candidate recipes",
+)
+def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
+    """Generate meal ideas using Cohere chat LLM."""
+    # First generate the n-day plan using the LLM
+    if payload.num_days < 1 or payload.num_days > 7:
+        raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 7"})
+    
+    dietary_kwargs = _dietary_kwargs(payload.dietary)
+
+    generate_meal_ideas_request = GenerateMealIdeasRequest(
+        user_input=payload.preferences or "balanced meals",
+        num_days = payload.queries_per_meal,
+        model="command-a-03-2025" # TODO: Make this an environment variable
+    )
+
+    meal_config = generate_meal_ideas(generate_meal_ideas_request)
+
+    # Recipes list
+    recipes_list: List[MealForLlm] = []
+    queries_list: List[str] = []
+
+    # Determine the number of recipes to return for each meal
+    recipes_per_meal = int(np.ceil(payload.candidate_recipes/len(meal_config.days)/3.0))+2 # we will trim back down after collecting recipes
+
+    payload_targets = {
+        "breakfast": payload.breakfast_targets,
+        "lunch": payload.lunch_targets,
+        "dinner": payload.dinner_targets
+    }
+
+    meal_keys = ["breakfast", "lunch", "dinner"]
+    for day_cfg in meal_config.days:
+        for meal_key in meal_keys:
+            query = day_cfg[meal_key]["query"]
+            meal_tag = day_cfg[meal_key]["meal_tag"]
+            meal_target = payload_targets[meal_key]
+
+            # Calculate macro targets
+            cal_min = payload.target_calories*(meal_target.macro_target_pct-meal_target.macro_tolerance_pct)/100.0
+            cal_max = payload.target_calories*(meal_target.macro_target_pct+meal_target.macro_tolerance_pct)/100.0
+            protein_min = payload.target_protein*(meal_target.macro_target_pct-meal_target.macro_tolerance_pct)/100.0
+            protein_max = payload.target_protein*(meal_target.macro_target_pct+meal_target.macro_tolerance_pct)/100.0
+            fat_min = payload.target_fat*(meal_target.macro_target_pct-meal_target.macro_tolerance_pct)/100.0
+            fat_max = payload.target_fat*(meal_target.macro_target_pct+meal_target.macro_tolerance_pct)/100.0
+            carbs_min = payload.target_carbs*(meal_target.macro_target_pct-meal_target.macro_tolerance_pct)/100.0
+            carbs_max = payload.target_carbs*(meal_target.macro_target_pct+meal_target.macro_tolerance_pct)/100.0
+
+            request_payload = RecipeSearchRequest(
+                query=query,
+                limit=recipes_per_meal,
+                meal_tag=meal_tag,
+                cal_min=cal_min,
+                cal_max=cal_max,
+                protein_min=protein_min,
+                # protein_max=protein_max,
+                # fat_min=fat_min,
+                fat_max=fat_max,
+                # carbs_min=carbs_min,
+                carbs_max=carbs_max,
+                **dietary_kwargs,
+            )
+
+            search_response = _core_search(request_payload, force_limit=recipes_per_meal)
+            logging.info(f"  Found {search_response.count} results using dense query '{query}'")
+            for recipe_payload in search_response.results:
+                formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key)
+                logging.info(formatted_recipe)
+                recipes_list.append(formatted_recipe)
+
+            queries_list.append(query)
+
+    return NDayRecipesResponse(
+        candidate_recipes=recipes_list,
+        original_request=payload,
+        queries=queries_list
+    )
+
+
+    
 
     
 
