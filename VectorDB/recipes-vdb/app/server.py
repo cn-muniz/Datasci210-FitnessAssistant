@@ -391,6 +391,7 @@ class MealForLlm(BaseModel):
     quantities: Optional[List[str]] = None
     units: Optional[List[str]] = None
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
+    recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
 
 class MealCounts(BaseModel):
     breakfast: int = 0
@@ -613,6 +614,7 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         quantities=[q["text"] for q in recipe_payload.get("quantities")],
         units=[u["text"] for u in recipe_payload.get("units")],
         meal_type=meal_type,
+        recipe_id=recipe_payload.get("source_id")
     )
 
 def _cohere_chat(messages, model="command-a-03-2025"):
