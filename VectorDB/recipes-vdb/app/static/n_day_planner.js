@@ -109,9 +109,9 @@ const getMetricStatus = (type, target, actual) => {
 const buildDayMetrics = (day) => {
   const metricsConfig = [
     { type: "calories", label: "Calories", suffix: "cal", target: day?.target_calories, actual: day?.total_calories },
-    { type: "protein", label: "Protein", suffix: "g", target: day?.target_protein, actual: day?.total_protein },
-    { type: "carbs", label: "Carbs", suffix: "g", target: day?.target_carbs, actual: day?.total_carbs },
-    { type: "fat", label: "Fat", suffix: "g", target: day?.target_fat, actual: day?.total_fat },
+    { type: "protein", label: "Protein (min)", suffix: "g", target: day?.target_protein, actual: day?.total_protein },
+    { type: "carbs", label: "Carbs (max)", suffix: "g", target: day?.target_carbs, actual: day?.total_carbs },
+    { type: "fat", label: "Fat (max)", suffix: "g", target: day?.target_fat, actual: day?.total_fat },
   ];
 
   const container = document.createElement("div");
@@ -528,7 +528,7 @@ const wireHandlers = () => {
 
       const data = await response.json();
       renderPlans(data?.daily_plans);
-      expandAll(true);
+      expandAll(false);
       showBanner("Meal plan generated successfully!", "success");
     } catch (error) {
       console.error(error);
