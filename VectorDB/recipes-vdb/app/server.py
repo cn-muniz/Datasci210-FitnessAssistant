@@ -295,9 +295,9 @@ class MealPlanResponse(BaseModel):
 class NDayPlanRequest(BaseModel):
     # caloric target, dietary flags, preferences, exclusions
     target_calories: float = Field(..., gt=0, description="Desired total calories for the day")
-    target_protein: Optional[float] = Field(default=None, gt=0, description="Desired total protein for the day")
-    target_fat: Optional[float] = Field(default=None, gt=0, description="Desired total fat for the day")
-    target_carbs: Optional[float] = Field(default=None, gt=0, description="Desired total carbs for the day")
+    target_protein: Optional[float] = Field(default=100, gt=0, description="Desired total protein for the day")
+    target_fat: Optional[float] = Field(default=60, gt=0, description="Desired total fat for the day")
+    target_carbs: Optional[float] = Field(default=200, gt=0, description="Desired total carbs for the day")
     dietary: List[str] = Field(default_factory=list, description="List of dietary flags, e.g. ['gluten_free']")
     num_days: int = Field(..., ge=1, le=7, description="Number of days to plan for (1-7)")
     limit_per_meal: int = Field(5, ge=1, le=20, description="How many recipes to fetch per meal slot. One will be chosen randomly.")
@@ -540,7 +540,7 @@ def _core_search(payload: RecipeSearchRequest, force_limit: Optional[int] = None
         COLLECTION, query_vector=("text_embedding", qvec),
         query_filter=flt, limit=search_limit, with_payload=True
     )
-    logging.info(f"Dense search found {len(d_hits)} hits")
+    # logging.info(f"Dense search found {len(d_hits)} hits")
 
     use_sparse = payload.hybrid and bool(STATE["sparse_enabled"])
     if use_sparse:
@@ -563,7 +563,7 @@ def _core_search(payload: RecipeSearchRequest, force_limit: Optional[int] = None
     else:
         results = [h.payload for h in d_hits[: (force_limit or payload.limit)]]
 
-    logging.info(f"Returning {len(results)} results (hybrid={use_sparse})")
+    # logging.info(f"Returning {len(results)} results (hybrid={use_sparse})")
     return SearchResponse(hybrid_used=use_sparse, count=len(results), results=results)
 
 def _dietary_kwargs(dietary: List[str]) -> Dict[str, bool]:
@@ -719,7 +719,7 @@ def one_day(payload: MealPlanRequest = Body(...)):
         if payload.exclusions:
             base_query += " excluding (" + payload.exclusions + ")"
 
-        logging.info(f"Meal '{cfg['name']}' query: {base_query}")
+        # logging.info(f"Meal '{cfg['name']}' query: {base_query}")
 
         pct = cfg["calorie_pct"]
         cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
@@ -842,7 +842,7 @@ def n_day(payload: NDayPlanRequest = Body(...)):
         resp = _cohere_chat(judge_prompt, model="command-a-03-2025")
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
-    logging.info(f"LLM response: {resp}")
+    # logging.info(f"LLM response: {resp}")
 
     selected_recipes = llm_judge.extract_meal_plan_json(resp)
     # # Save selected recipes to a file for debugging
@@ -901,74 +901,6 @@ def n_day(payload: NDayPlanRequest = Body(...)):
         daily_plans.append(day_meals)
     return NDayPlanResponse(daily_plans=daily_plans)
 
-
-    # meal_config = generate_meal_ideas(generate_meal_ideas_request)
-    # logging.info(f"LLM meal plan config: {meal_config}")
-
-    # # weekly plan
-    # daily_plans: List[MealPlanResponse] = []
-
-    # meal_keys = ["breakfast", "lunch", "dinner"]
-
-    # for day_cfg in meal_config.days:
-    #     daily_meals: List[Optional[MealSummary]] = []
-    #     total_calories = 0.0
-    #     for meal_key in meal_keys:
-    #         query = day_cfg[meal_key]["query"]
-    #         meal_tag = day_cfg[meal_key]["meal_tag"]
-
-    #         logging.info(f"Meal '{meal_key}' query: {query} tag: {meal_tag}")
-
-    #         pct = MEAL_CALORIES_FRAC[meal_key]
-    #         cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
-    #         cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
-
-    #         limit = payload.limit_per_meal
-    #         request_payload = RecipeSearchRequest(
-    #             query=query,
-    #             limit=limit,
-    #             meal_tag=meal_tag,
-    #             cal_min=cal_min,
-    #             cal_max=cal_max,
-    #             **dietary_kwargs,
-    #         )
-    #         search_response = _core_search(request_payload, force_limit=limit)
-
-    #         # Pick a random recipe from the top-N to add variety
-    #         recipe_payload = search_response.results[0] if search_response.results else None
-    #         logging.info(f"  Found {search_response.count} results")
-    #         if limit > 1 and len(search_response.results) > 1:
-    #             import random
-    #             recipe_payload = random.choice(search_response.results)
-
-    #         meal_summary = _format_meal_result(recipe_payload, meal_key, query)
-    #         daily_meals.append(meal_summary)
-
-    #         actual_calories = 0.0
-    #         if recipe_payload:
-    #             macros = recipe_payload.get("macros_per_serving", {}) or {}
-    #             raw_calories = macros.get("cal", 0) or 0
-    #             try:
-    #                 actual_calories = float(raw_calories)
-    #             except (TypeError, ValueError):
-    #                 actual_calories = 0.0
-
-    #         if meal_summary:
-    #             total_calories += meal_summary.calories
-
-    #         expected_calories = adjusted_target * pct
-    #         calorie_offset = expected_calories - actual_calories
-    #         adjusted_target += calorie_offset
-
-    #     daily_plans.append(MealPlanResponse(
-    #         day=len(daily_plans) + 1,
-    #         target_calories=original_target,
-    #         total_calories=total_calories,
-    #         meals=daily_meals,
-    #     ))
-
-    return NDayPlanResponse(daily_plans=daily_plans)
-
 # LLM test endpoint
 @app.post(
     "/test-chat",
@@ -1016,16 +948,16 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
             + ", ".join(readable_flags)
             + "."
         )
-    for item in prompt:
-        logging.info(item) # Need to keep this short for Cohere
-    logging.info(f"Generated prompt: {prompt}")
+    # for item in prompt:
+    #     logging.info(item) # Need to keep this short for Cohere
+    # logging.info(f"Generated prompt: {prompt}")
 
     # Call the LLM
     try:
         resp = _cohere_chat(prompt, model=payload.model or "command-a-03-2025")
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
-    logging.info(f"LLM response: {resp}")
+    # logging.info(f"LLM response: {resp}")
     # Basic test for now
     # resp = "{\n  \"plan_meta\": {\n    \"days\": 2,\n    \"notes\": \"Mix of pancakes and oatmeal for breakfast, salads for lunch, and hearty chicken or fish dinners.\"\n  },\n  \"days\": [\n    {\n      \"day\": 1,\n      \"breakfast\": {\n        \"title\": \"Blueberry Pancakes\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"fluffy blueberry pancakes breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Grilled Chicken Caesar Salad\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"grilled chicken caesar salad lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Baked Salmon with Roasted Vegetables\",\n        \"meal_tag\": \"main\",\n        \"query\": \"baked salmon roasted vegetables hearty dinner\"\n      }\n    },\n    {\n      \"day\": 2,\n      \"breakfast\": {\n        \"title\": \"Apple Cinnamon Oatmeal\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"apple cinnamon oatmeal breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Greek Salad with Feta\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"greek salad feta lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Lemon Herb Roasted Chicken\",\n        \"meal_tag\": \"main\",\n        \"query\": \"lemon herb roasted chicken hearty dinner\"\n      }\n    }\n  ]\n}"
 
@@ -1036,7 +968,7 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
         logging.warning(f"LLM response parse/validation errors: {errors}")
     if not valid:
         raise HTTPException(status_code=500, detail={"message": f"LLM response format invalid: {format_resp}"})
-    logging.info(f"LLM response parsed OK: {format_resp}")    
+    # logging.info(f"LLM response parsed OK: {format_resp}")    
 
     # return the formatted response
     return GenerateMealIdeasResponse(
@@ -1123,10 +1055,10 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             )
 
             search_response = _core_search(request_payload, force_limit=recipes_per_meal)
-            logging.info(f"  Found {search_response.count} results using dense query '{query}'")
+            # logging.info(f"  Found {search_response.count} results using dense query '{query}'")
             for recipe_payload in search_response.results:
                 formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key,query)
-                logging.info(formatted_recipe)
+                # logging.info(formatted_recipe)
                 # recipes_list.append(formatted_recipe)
                 recipe_list_key = f"{day_cfg["day"]}"
                 if recipe_list_key not in list(nested_candidates[meal_key].keys()):
@@ -1148,16 +1080,16 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             total_candidates += len(query_list)
             meal_counts[meal] += len(query_list)
     
-    logging.info(f"total_candidates: {total_candidates} desired candidates: {payload.candidate_recipes}")
+    # logging.info(f"total_candidates: {total_candidates} desired candidates: {payload.candidate_recipes}")
     while total_candidates > payload.candidate_recipes:
-        logging.info(meal_counts)
+        # logging.info(meal_counts)
         # Get the meal with the most recipes
         max_meal = max(meal_counts,key=meal_counts.get)
-        logging.info(f"max meal: {max_meal}")
+        # logging.info(f"max meal: {max_meal}")
 
         # Get the query with the most recipes for the max meal
         max_query = max(nested_candidates[max_meal],key=lambda k: len(nested_candidates[max_meal][k]))
-        logging.info(f"max query: {max_meal}")
+        # logging.info(f"max query: {max_meal}")
 
         # Trim the list from the end by 1
         nested_candidates[max_meal][max_query] = nested_candidates[max_meal][max_query][:-1]
@@ -1175,8 +1107,8 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             meal_counts[meal] += len(query_list)
             for recipe in query_list:
                 recipes_list.append(recipe)
-    logging.info(meal_counts)
-    logging.info(f"Total candidate recipes: {len(recipes_list)}")
+    # logging.info(meal_counts)
+    # logging.info(f"Total candidate recipes: {len(recipes_list)}")
 
     return NDayRecipesResponse(
         candidate_recipes=recipes_list,

@@ -1,6 +1,156 @@
 const qs = (selector, ctx = document) => ctx.querySelector(selector);
 const qsa = (selector, ctx = document) => Array.from(ctx.querySelectorAll(selector));
 
+const loadingEmojis = [
+  "🥕", 
+  "⏲️", 
+  "🍲", 
+  "🥦", 
+  "🥘", 
+  "🍲", 
+  "🍽️", 
+  "🌶️", 
+  "🥗"
+];
+const loadingPhrases = [
+  "Chopping the carrots",
+  "Preheating the oven",
+  "Simmering the sauce",
+  "Baking the broccoli",
+  "Whisking the batter",
+  "Sautéing the veggies",
+  "Plating the meal",
+  "Toasting the spices",
+  "Mixing the dressing",
+];
+let loadingIntervalId = null;
+let loadingStep = 0;
+
+const updateLoadingOverlay = () => {
+  const overlay = qs("#loading-overlay");
+  if (!overlay || overlay.hidden) {
+    return;
+  }
+  const emojiEl = qs("#loading-emoji", overlay);
+  const textEl = qs("#loading-text", overlay);
+  const emoji = loadingEmojis[loadingStep % loadingEmojis.length];
+  const phrase = loadingPhrases[loadingStep % loadingPhrases.length];
+  if (emojiEl) {
+    emojiEl.textContent = emoji;
+  }
+  if (textEl) {
+    textEl.textContent = `${phrase}…`;
+  }
+  loadingStep += 1;
+};
+
+function showLoadingOverlay() {
+  const overlay = qs("#loading-overlay");
+  if (!overlay) return;
+
+  if (loadingIntervalId) {
+    clearInterval(loadingIntervalId);
+  }
+
+  loadingStep = Math.floor(Math.random() * loadingPhrases.length);
+  overlay.hidden = false;
+  overlay.setAttribute("aria-hidden", "false");
+  updateLoadingOverlay();
+  loadingIntervalId = window.setInterval(updateLoadingOverlay, 5000);
+}
+
+function hideLoadingOverlay() {
+  if (loadingIntervalId) {
+    clearInterval(loadingIntervalId);
+    loadingIntervalId = null;
+  }
+  const overlay = qs("#loading-overlay");
+  if (!overlay) return;
+  overlay.hidden = true;
+  overlay.setAttribute("aria-hidden", "true");
+}
+
+const formatMetricValue = (value, suffix = "") => {
+  if (!Number.isFinite(value)) {
+    return "—";
+  }
+  const rounded = Math.round(value);
+  return `${rounded}${suffix ? ` ${suffix}` : ""}`;
+};
+
+const getMetricStatus = (type, target, actual) => {
+  if (!Number.isFinite(target) || !Number.isFinite(actual)) {
+    return "neutral";
+  }
+
+  const safeTarget = target === 0 ? 0.0001 : target;
+  const diff = actual - target;
+  const absDiffRatio = Math.abs(diff) / Math.abs(safeTarget);
+
+  switch (type) {
+    case "calories":
+      if (absDiffRatio <= 0.1) return "good";
+      if (absDiffRatio <= 0.2) return "warn";
+      return "bad";
+    case "protein":
+      if (actual >= target) return "good";
+      if ((target - actual) / Math.abs(safeTarget) <= 0.1) return "warn";
+      return "bad";
+    case "carbs":
+    case "fat":
+      if (actual <= target) return "good";
+      if ((actual - target) / Math.abs(safeTarget) <= 0.1) return "warn";
+      return "bad";
+    default:
+      return "neutral";
+  }
+};
+
+const buildDayMetrics = (day) => {
+  const metricsConfig = [
+    { type: "calories", label: "Calories", suffix: "cal", target: day?.target_calories, actual: day?.total_calories },
+    { type: "protein", label: "Protein", suffix: "g", target: day?.target_protein, actual: day?.total_protein },
+    { type: "carbs", label: "Carbs", suffix: "g", target: day?.target_carbs, actual: day?.total_carbs },
+    { type: "fat", label: "Fat", suffix: "g", target: day?.target_fat, actual: day?.total_fat },
+  ];
+
+  const container = document.createElement("div");
+  container.className = "day-metrics";
+  let hasContent = false;
+
+  metricsConfig.forEach((metric) => {
+    const hasValues = Number.isFinite(metric.target) || Number.isFinite(metric.actual);
+    if (!hasValues) {
+      return;
+    }
+    hasContent = true;
+
+    const card = document.createElement("div");
+    card.className = "day-metric";
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "day-metric-label";
+    labelEl.textContent = metric.label;
+    card.appendChild(labelEl);
+
+    const targetEl = document.createElement("span");
+    targetEl.className = "day-metric-target";
+    targetEl.textContent = `Target: ${formatMetricValue(metric.target, metric.suffix)}`;
+    card.appendChild(targetEl);
+
+    const actualEl = document.createElement("span");
+    const status = getMetricStatus(metric.type, metric.target, metric.actual);
+    actualEl.className = `day-metric-actual status-${status}`;
+    actualEl.textContent = `Actual: ${formatMetricValue(metric.actual, metric.suffix)}`;
+    card.appendChild(actualEl);
+
+    card.dataset.metricType = metric.type;
+    container.appendChild(card);
+  });
+
+  return hasContent ? container : null;
+};
+
 const formatMealTitle = (meal) => {
   const mealType = meal?.meal_type ? `${meal.meal_type}: ` : "";
   return `${mealType}${meal?.title ?? "Meal"}`;
@@ -191,19 +341,10 @@ const renderDay = (day, idx) => {
   title.textContent = `Day ${dayNumber}`;
   info.appendChild(title);
 
-  const meta = document.createElement("div");
-  meta.className = "day-meta";
-  if (Number.isFinite(day?.target_calories)) {
-    const target = document.createElement("span");
-    target.textContent = `Target: ${Math.round(day.target_calories)} cal`;
-    meta.appendChild(target);
+  const metrics = buildDayMetrics(day);
+  if (metrics) {
+    info.appendChild(metrics);
   }
-  if (Number.isFinite(day?.total_calories)) {
-    const total = document.createElement("span");
-    total.textContent = `Planned: ${Math.round(day.total_calories)} cal`;
-    meta.appendChild(total);
-  }
-  info.appendChild(meta);
 
   const preview = document.createElement("div");
   preview.className = "day-preview";
@@ -278,10 +419,12 @@ const setButtonLoading = (isLoading) => {
     spinner.className = "spinner";
     button.appendChild(spinner);
     button.disabled = true;
+    showLoadingOverlay();
   } else {
     const original = button.dataset.originalText || "Generate meal plan";
     button.textContent = original;
     button.disabled = false;
+    hideLoadingOverlay();
   }
 };
 
@@ -317,16 +460,51 @@ const wireHandlers = () => {
     event.preventDefault();
 
     const formData = new FormData(form);
+    const errors = [];
+    const preferences = (formData.get("preferences") || "").toString().trim();
+    const exclusions = (formData.get("exclusions") || "").toString().trim();
     const payload = {
       target_calories: Number(formData.get("target_calories")),
-      limit_per_meal: Number(formData.get("limit_per_meal")),
+      limit_per_meal: Number(5),
       num_days: Number(formData.get("num_days")),
-      dietary: formData.getAll("dietary"),
-      preferences: (formData.get("preferences") || "").toString().trim(),
+      dietary: formData.getAll("dietary").filter(Boolean),
     };
 
     if (!payload.target_calories || payload.target_calories <= 0) {
       showBanner("Please provide a valid target calorie amount.", "error");
+      return;
+    }
+
+    if (preferences) {
+      payload.preferences = preferences;
+    }
+
+    if (exclusions) {
+      payload.exclusions = exclusions;
+    }
+
+    [
+      ["target_protein", "target protein"],
+      ["target_fat", "target fat"],
+      ["target_carbs", "target carbs"],
+    ].forEach(([field, label]) => {
+      const rawValue = formData.get(field);
+      const value = typeof rawValue === "string" ? rawValue.trim() : "";
+      if (!value) {
+        return;
+      }
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        errors.push(`Please provide a positive number for ${label}.`);
+        return;
+      }
+      payload[field] = parsed;
+    });
+
+    console.log(payload);
+
+    if (errors.length) {
+      showBanner(errors[0], "error");
       return;
     }
 

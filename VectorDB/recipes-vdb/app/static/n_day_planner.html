@@ -26,7 +26,26 @@
       <form id="planner-form" class="planner-form">
         <div class="form-row">
           <label for="target-calories">Target calories</label>
-          <input id="target-calories" name="target_calories" type="number" min="400" max="6000" step="50" required placeholder="e.g., 2200" />
+          <!-- <input id="target-calories" name="target_calories" type="number" min="400" max="6000" step="50" required placeholder="e.g., 2200" /> -->
+          <input id="target-calories" name="target_calories" type="number" min="400" max="6000" step="50" value="2500"/>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="target-protein">Target protein (g)</label>
+            <!-- <input id="target-protein" name="target_protein" type="number" min="1" max="400" step="1" placeholder="e.g., 150" /> -->
+            <input id="target-protein" name="target_protein" type="number" min="1" max="400" step="1" value="100" />
+          </div>
+          <div class="form-row">
+            <label for="target-fat">Target fat (g)</label>
+            <!-- <input id="target-fat" name="target_fat" type="number" min="1" max="250" step="1" placeholder="e.g., 70" /> -->
+            <input id="target-fat" name="target_fat" type="number" min="1" max="250" step="1" value="70" />
+          </div>
+          <div class="form-row">
+            <label for="target-carbs">Target carbs (g)</label>
+            <!-- <input id="target-carbs" name="target_carbs" type="number" min="1" max="800" step="1" placeholder="e.g., 250" /> -->
+            <input id="target-carbs" name="target_carbs" type="number" min="1" max="800" step="1" value="200" />
+          </div>
         </div>
 
         <div class="form-row">
@@ -55,20 +74,21 @@
           </div>
         </div>
 
-        <div class="form-grid">
-          <div class="form-row">
-            <label for="limit-per-meal">Limit per meal (number of candidate recipes before selection)</label>
-            <input id="limit-per-meal" name="limit_per_meal" type="number" min="1" max="20" value="3" required />
-          </div>
-          <div class="form-row">
-            <label for="num-days">Number of days</label>
-            <input id="num-days" name="num_days" type="number" min="1" max="7" value="3" required />
-          </div>
+        <div class="form-row">
+          <label for="num-days">Number of days</label>
+          <input id="num-days" name="num_days" type="number" min="1" max="7" value="7" required />
         </div>
 
         <div class="form-row">
           <label for="preferences">Preferences / brief</label>
-          <textarea id="preferences" name="preferences" rows="3" placeholder="Describe the meals or goals you have in mind. Example: I want easy oatmeal or smoothie recipes for breakfast, salads or sandwiches for lunch, and pasta or American food for dinner"></textarea>
+          <!-- <textarea id="preferences" name="preferences" rows="3" placeholder="Describe the meals or goals you have in mind. Example: I want easy oatmeal or smoothie recipes for breakfast, salads or sandwiches for lunch, and pasta or American food for dinner"></textarea> -->
+          <textarea id="preferences" name="preferences" rows="3">I want easy oatmeal or smoothie recipes for breakfast, salads or sandwiches for lunch, and pasta or American food for dinner</textarea>
+        </div>
+
+        <div class="form-row">
+          <label for="exclusions">Exclusions</label>
+          <!-- <textarea id="exclusions" name="exclusions" rows="2" placeholder="List ingredients or meal types to avoid. Example: No peanuts, mushrooms, or shellfish."></textarea> -->
+          <textarea id="exclusions" name="exclusions" rows="2">No peanuts, mushrooms, or shellfish.</textarea>
         </div>
 
         <div class="form-actions">
@@ -81,6 +101,15 @@
       <p id="results-hint" class="results-hint">Fill in the form above and choose “Generate meal plan” to see results.</p>
       <div id="results-list" class="results-list"></div>
     </section>
+  </div>
+
+  <div id="loading-overlay" class="loading-overlay" hidden aria-hidden="true">
+    <div class="loading-content" role="status" aria-live="assertive">
+      <p id="loading-title" class="loading-title">Generating your meal plan</p>
+      <p id="loading-subtext" class="loading-subtext">This may take a moment</p>
+      <div id="loading-emoji" class="loading-emoji" aria-hidden="true">🥕</div>
+      <p id="loading-text" class="loading-text">Chopping the carrots…</p>
+    </div>
   </div>
 
   <script src="/static/n_day_planner.js"></script>
