@@ -19,6 +19,7 @@ import numpy as np
 import logging
 logging.basicConfig(level=logging.INFO)
 import llm_planning  # for meal plan prompt templates
+import llm_judge
 
 # ---------------- Config ----------------
 
@@ -283,6 +284,12 @@ class MealPlanResponse(BaseModel):
     day: Optional[int] = Field(None, description="Day number in multi-day plan, if applicable")
     target_calories: float
     total_calories: float
+    target_protein: Optional[float]
+    total_protein: Optional[float]
+    target_fat: Optional[float]
+    total_fat: Optional[float]
+    target_carbs: Optional[float]
+    total_carbs: Optional[float]
     meals: List[Optional[MealSummary]]
 
 class NDayPlanRequest(BaseModel):
@@ -392,6 +399,7 @@ class MealForLlm(BaseModel):
     units: Optional[List[str]] = None
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
     recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
+    query: Optional[str] = Field(None, description="Query used in dense search")
 
 class MealCounts(BaseModel):
     breakfast: int = 0
@@ -580,8 +588,9 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
         description=recipe_payload.get("summary"),
         instructions=recipe_payload.get("instructions"),
         ingredients=recipe_payload.get("ingredients_raw"),
-        quantities=[q["text"] for q in recipe_payload.get("quantities")],
-        units=[u["text"] for u in recipe_payload.get("units")],
+        # Sometimes quantities/units are dicitonaries with "text" keys, sometimes they are just lists of strings
+        quantities=[q["text"] if isinstance(q, dict) else q for q in recipe_payload.get("quantities")],
+        units=[u["text"] if isinstance(u, dict) else u for u in recipe_payload.get("units")],
         query=query,
         macros=MacroSummary(
             protein=f"{int(_macro_val('protein_g') + 0.5)}g",
@@ -590,7 +599,30 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
         ),
     )
 
-def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type: str) -> Optional[MealSummary]:
+def _format_meal_candidate(recipe_payload: Optional[Dict[str, Any]], meal_type: str, query: str) -> Optional[MealSummary]:
+    if not recipe_payload:
+        return None
+
+    return MealSummary(
+        meal_type=meal_type,
+        title=recipe_payload.get("title", ""),
+        calories=int(recipe_payload.get("calories") + 0.5),
+        description=recipe_payload.get("description"),
+        instructions=recipe_payload.get("instructions"),
+        ingredients=recipe_payload.get("ingredients"),
+        # Sometimes quantities/units are dicitonaries with "text" keys, sometimes they are just lists of strings
+        quantities=[q["text"] if isinstance(q, dict) else q for q in recipe_payload.get("quantities")],
+        units=[u["text"] if isinstance(u, dict) else u for u in recipe_payload.get("units")],
+        query=query,
+        macros=MacroSummary(
+            protein=f"{int(recipe_payload.get('protein_g') + 0.5)}g",
+            carbs=f"{int(recipe_payload.get('carbs_g') + 0.5)}g",
+            fat=f"{int(recipe_payload.get('fat_g') + 0.5)}g",
+        ),
+    )
+
+
+def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type: str, query: str) -> Optional[MealSummary]:
     if not recipe_payload:
         return None
 
@@ -614,7 +646,8 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         quantities=[q["text"] for q in recipe_payload.get("quantities")],
         units=[u["text"] for u in recipe_payload.get("units")],
         meal_type=meal_type,
-        recipe_id=recipe_payload.get("source_id")
+        recipe_id=recipe_payload.get("source_id"),
+        query=query
     )
 
 def _cohere_chat(messages, model="command-a-03-2025"):
@@ -738,84 +771,201 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     """Return a simple four-meal day (breakfast, lunch, dinner, snack) tailored to calorie target + diet flags."""
     _assert_ready()
 
-    original_target = float(payload.target_calories)
-    adjusted_target = float(payload.target_calories)
-    dietary_kwargs = _dietary_kwargs(payload.dietary)
+    # original_target = float(payload.target_calories)
+    # adjusted_target = float(payload.target_calories)
+    # dietary_kwargs = _dietary_kwargs(payload.dietary)
 
     # First generate the n-day plan using the LLM
     if payload.num_days < 1 or payload.num_days > 7:
         raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 7"})
-    generate_meal_ideas_request = GenerateMealIdeasRequest(
-        user_input=payload.preferences or "balanced meals",
+    # generate_meal_ideas_request = GenerateMealIdeasRequest(
+    #     user_input=payload.preferences or "balanced meals",
+    #     num_days=payload.num_days,
+    #     model="command-a-03-2025",
+    #     dietary=payload.dietary
+    # )
+    get_candidate_recipes_request = NDayRecipesRequest(
+        target_calories=payload.target_calories,
+        target_protein=payload.target_protein,
+        target_fat=payload.target_fat,
+        target_carbs=payload.target_carbs,
+        dietary=payload.dietary,
         num_days=payload.num_days,
-        model="command-a-03-2025",
-        dietary=payload.dietary
+        queries_per_meal=7, # queries per meal type - hardcoded for now
+        candidate_recipes=42,
+        preferences=payload.preferences,
+        exclusions=payload.exclusions
     )
-    
-    meal_config = generate_meal_ideas(generate_meal_ideas_request)
-    logging.info(f"LLM meal plan config: {meal_config}")
 
-    # weekly plan
-    daily_plans: List[MealPlanResponse] = []
+    nday_recipes_response = get_candidate_recipes(get_candidate_recipes_request)
+    # nday_recipes_response = NDayRecipesResponse(
+    #     candidate_recipes=TEST_CANDIDATE_RECIPES_RESPONSE["candidate_recipes"],
+    #     original_request=TEST_CANDIDATE_RECIPES_RESPONSE["original_request"],
+    #     queries=TEST_CANDIDATE_RECIPES_RESPONSE["queries"],
+    #     meal_counts=TEST_CANDIDATE_RECIPES_RESPONSE["meal_counts"]
+    # )
 
-    meal_keys = ["breakfast", "lunch", "dinner"]
+    # TODO: consider dropping quantities and units from candidates to free up more tokens
+    candidate_recipes_full = nday_recipes_response.candidate_recipes
+    # make a copy of candidate_recipes_full with only the fields needed for the LLM judge
+    candidate_recipes_trim = [
+        {
+            "title": recipe.title,
+            "calories": recipe.calories,
+            "protein_g": recipe.protein_g,
+            "fat_g": recipe.fat_g,
+            "carbs_g": recipe.carbs_g,
+            "description": recipe.description,
+            "ingredients": recipe.ingredients,
+            "instructions": recipe.instructions,
+            "recipe_id": recipe.recipe_id,
+            "meal_type": recipe.meal_type
+        }
+        for recipe in candidate_recipes_full
+    ]
 
-    for day_cfg in meal_config.days:
-        daily_meals: List[Optional[MealSummary]] = []
-        total_calories = 0.0
-        for meal_key in meal_keys:
-            query = day_cfg[meal_key]["query"]
-            meal_tag = day_cfg[meal_key]["meal_tag"]
+    # Create cohere judge prompt
+    judge_prompt = llm_judge.generate_system_prompt(
+        daily_cal=payload.target_calories,
+        daily_protein=payload.target_protein,
+        daily_fat=payload.target_fat,
+        daily_carbs=payload.target_carbs,
+        num_days=payload.num_days,
+        dietary=payload.dietary,
+        preferences=payload.preferences,
+        exclusions=payload.exclusions,
+        candidates=json.dumps(candidate_recipes_trim)
+    )
 
-            logging.info(f"Meal '{meal_key}' query: {query} tag: {meal_tag}")
+    # Call the LLM
+    try:
+        resp = _cohere_chat(judge_prompt, model="command-a-03-2025")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
+    logging.info(f"LLM response: {resp}")
 
-            pct = MEAL_CALORIES_FRAC[meal_key]
-            cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
-            cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
+    selected_recipes = llm_judge.extract_meal_plan_json(resp)
+    # # Save selected recipes to a file for debugging
+    # with open("selected_recipes.json", "w") as f:
+    #     json.dump(selected_recipes, f, indent=2)
+    # # Read in the selected recipes from a file for testing
+    # with open("selected_recipes.json", "r") as f:
+    #     selected_recipes = json.load(f)
 
-            limit = payload.limit_per_meal
-            request_payload = RecipeSearchRequest(
-                query=query,
-                limit=limit,
-                meal_tag=meal_tag,
-                cal_min=cal_min,
-                cal_max=cal_max,
-                **dietary_kwargs,
-            )
-            search_response = _core_search(request_payload, force_limit=limit)
 
-            # Pick a random recipe from the top-N to add variety
-            recipe_payload = search_response.results[0] if search_response.results else None
-            logging.info(f"  Found {search_response.count} results")
-            if limit > 1 and len(search_response.results) > 1:
-                import random
-                recipe_payload = random.choice(search_response.results)
+    ## Recipe ID mapping
+    # Check to see if the recipe_ids are valid
+    full_recipe_id_list = [a.recipe_id for a in candidate_recipes_full]
 
-            meal_summary = _format_meal_result(recipe_payload, meal_key, query)
-            daily_meals.append(meal_summary)
+    daily_plans = []
 
-            actual_calories = 0.0
-            if recipe_payload:
-                macros = recipe_payload.get("macros_per_serving", {}) or {}
-                raw_calories = macros.get("cal", 0) or 0
-                try:
-                    actual_calories = float(raw_calories)
-                except (TypeError, ValueError):
-                    actual_calories = 0.0
+    for day in selected_recipes.get("days"):
+        day_meals = {
+            "day": day.get("day"),
+            "target_calories": payload.target_calories,
+            "target_protein": payload.target_protein,
+            "target_fat": payload.target_fat,
+            "target_carbs": payload.target_carbs,
+            "total_calories": 0.0,
+            "total_protein": 0.0,
+            "total_fat": 0.0,
+            "total_carbs": 0.0,
+            "meals": []
+        }
+        for meal_key,meal in day.get("meals").items():
+            if meal.get("recipe_id") not in full_recipe_id_list:
+                # TODO: Add error handling here
+                day_meals.append({
+                    "title": "Error",
+                    "macros_per_serving": {},
+                    "summary": "Error",
+                    "instructions": "Error",
+                    "ingredients_raw": [],
+                    "quantities": [],
+                    "units": [],
+                    "query": "Error",
+                })
 
-            if meal_summary:
-                total_calories += meal_summary.calories
+            else:
+                recipe_index = full_recipe_id_list.index(meal.get("recipe_id"))
+                full_meal = candidate_recipes_full[recipe_index]
+                # convert to dictionary
+                full_meal = full_meal.dict() if isinstance(full_meal, BaseModel) else full_meal
+                day_meals.get("meals").append(_format_meal_candidate(full_meal, meal_key, full_meal.get("query", "")))
+                # Sum up macros
+                day_meals["total_calories"] += full_meal.get("calories", 0) or 0
+                day_meals["total_protein"] += full_meal.get("protein_g", 0) or 0
+                day_meals["total_fat"] += full_meal.get("fat_g", 0) or 0
+                day_meals["total_carbs"] += full_meal.get("carbs_g", 0) or 0
 
-            expected_calories = adjusted_target * pct
-            calorie_offset = expected_calories - actual_calories
-            adjusted_target += calorie_offset
+        daily_plans.append(day_meals)
+    return NDayPlanResponse(daily_plans=daily_plans)
 
-        daily_plans.append(MealPlanResponse(
-            day=len(daily_plans) + 1,
-            target_calories=original_target,
-            total_calories=total_calories,
-            meals=daily_meals,
-        ))
+
+    # meal_config = generate_meal_ideas(generate_meal_ideas_request)
+    # logging.info(f"LLM meal plan config: {meal_config}")
+
+    # # weekly plan
+    # daily_plans: List[MealPlanResponse] = []
+
+    # meal_keys = ["breakfast", "lunch", "dinner"]
+
+    # for day_cfg in meal_config.days:
+    #     daily_meals: List[Optional[MealSummary]] = []
+    #     total_calories = 0.0
+    #     for meal_key in meal_keys:
+    #         query = day_cfg[meal_key]["query"]
+    #         meal_tag = day_cfg[meal_key]["meal_tag"]
+
+    #         logging.info(f"Meal '{meal_key}' query: {query} tag: {meal_tag}")
+
+    #         pct = MEAL_CALORIES_FRAC[meal_key]
+    #         cal_min = max(0.0, adjusted_target * max(pct - MEAL_PLAN_TOLERANCE, 0))
+    #         cal_max = max(0.0, adjusted_target * (pct + MEAL_PLAN_TOLERANCE))
+
+    #         limit = payload.limit_per_meal
+    #         request_payload = RecipeSearchRequest(
+    #             query=query,
+    #             limit=limit,
+    #             meal_tag=meal_tag,
+    #             cal_min=cal_min,
+    #             cal_max=cal_max,
+    #             **dietary_kwargs,
+    #         )
+    #         search_response = _core_search(request_payload, force_limit=limit)
+
+    #         # Pick a random recipe from the top-N to add variety
+    #         recipe_payload = search_response.results[0] if search_response.results else None
+    #         logging.info(f"  Found {search_response.count} results")
+    #         if limit > 1 and len(search_response.results) > 1:
+    #             import random
+    #             recipe_payload = random.choice(search_response.results)
+
+    #         meal_summary = _format_meal_result(recipe_payload, meal_key, query)
+    #         daily_meals.append(meal_summary)
+
+    #         actual_calories = 0.0
+    #         if recipe_payload:
+    #             macros = recipe_payload.get("macros_per_serving", {}) or {}
+    #             raw_calories = macros.get("cal", 0) or 0
+    #             try:
+    #                 actual_calories = float(raw_calories)
+    #             except (TypeError, ValueError):
+    #                 actual_calories = 0.0
+
+    #         if meal_summary:
+    #             total_calories += meal_summary.calories
+
+    #         expected_calories = adjusted_target * pct
+    #         calorie_offset = expected_calories - actual_calories
+    #         adjusted_target += calorie_offset
+
+    #     daily_plans.append(MealPlanResponse(
+    #         day=len(daily_plans) + 1,
+    #         target_calories=original_target,
+    #         total_calories=total_calories,
+    #         meals=daily_meals,
+    #     ))
 
     return NDayPlanResponse(daily_plans=daily_plans)
 
@@ -975,7 +1125,7 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             search_response = _core_search(request_payload, force_limit=recipes_per_meal)
             logging.info(f"  Found {search_response.count} results using dense query '{query}'")
             for recipe_payload in search_response.results:
-                formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key)
+                formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key,query)
                 logging.info(formatted_recipe)
                 # recipes_list.append(formatted_recipe)
                 recipe_list_key = f"{day_cfg["day"]}"
@@ -1036,7 +1186,1915 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
     )
 
 
-    
+# TEST_CANDIDATE_RECIPES_RESPONSE = {
+#   "candidate_recipes": [
+#     {
+#       "title": "Steel Cut Oatmeal and Berries",
+#       "calories": 980.1,
+#       "protein_g": 77.381,
+#       "fat_g": 13.161,
+#       "carbs_g": 30.616,
+#       "description": "Steel cut oats cooked to desired consistency, topped with yogurt and blueberries; simple, healthy breakfast.",
+#       "instructions": "Prepare steel cut oats to package directions and desired consistency.\nPlace 1/4 of cooked oats in breakfast bowl.\nTop with 1/2 cup yogurt.\nTop with 1/4 cup blueberries.\nIf using frozen blueberries, thaw them slightly in the microwave.\nAlso consider blackberries for more soluble fiber!",
+#       "ingredients": [
+#         "oats",
+#         "water, bottled, generic",
+#         "blueberries, raw",
+#         "yogurt, greek, plain, nonfat"
+#       ],
+#       "quantities": [
+#         "1",
+#         "4",
+#         "1",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "b9a8cf4750",
+#       "query": "vegetarian blueberry oatmeal pancakes breakfast"
+#     },
+#     {
+#       "title": "Vegan Eggnog Waffles",
+#       "calories": 720.4480519481,
+#       "protein_g": 23.5245454545,
+#       "fat_g": 8.4136363636,
+#       "carbs_g": 10.0889249639,
+#       "description": "Vegan waffles made with oats, eggnog, and maple syrup, crispy on the outside and fluffy on the inside.",
+#       "instructions": "Put the oatmeal (either regular or quick cooking) in the food processor and blend until fine.\nAdd the other dry ingredients (flours, spice, and baking powder) and pulse until combined.\nAdd the wet ingredients and pulse until well mixed.\nHeat your waffle maker and grease in whichever way you prefer.\nCook the waffles until crispy.\nI found that it took 5 minutes per batch.\nServe warm with more maple syrup.",
+#       "ingredients": [
+#         "oats",
+#         "wheat flour, white, all-purpose, unenriched",
+#         "beans, snap, green, raw",
+#         "leavening agents, baking powder, double-acting, sodium aluminum sulfate",
+#         "pumpkin, raw",
+#         "eggnog",
+#         "oil, olive, salad or cooking",
+#         "syrup, maple, canadian",
+#         "salt, table"
+#       ],
+#       "quantities": [
+#         "2",
+#         "12",
+#         "12",
+#         "1",
+#         "12",
+#         "2 1/2",
+#         "2",
+#         "4",
+#         "12"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "ea4fccb4bf",
+#       "query": "vegetarian blueberry oatmeal pancakes breakfast"
+#     },
+#     {
+#       "title": "A Bowl of Gluten-Free Oatmeal",
+#       "calories": 721,
+#       "protein_g": 34.57,
+#       "fat_g": 13.13,
+#       "carbs_g": 13.22,
+#       "description": "Creamy, comforting oatmeal cooked with milk and water, flavored with vanilla and topped with sweetener and fruit; simple, satisfying breakfast.",
+#       "instructions": "Set a saucepan over high heat.\nPour in the milk and water.\nAdd the salt and vanilla extract.\nBring the liquids to a boil.\nWhen the milky water is boiling, pour in the oats.\nStir quite vigorously.\nWhen the water returns to a boil, turn down the heat to low.\nSimmer the oats, stirring every few minutes, until the oats are creamy and plump, the liquid fully absorbed, about 15 minutes.\nTurn off the heat and cover the pan.\nLet the oatmeal sit for five minutes to fully absorb the liquid.\nTop with your favorite sweetener and fruit.\n(This one is maple syrup, peaches, and blackberries.)\nVariations: If you cannot eat dairy, almond milk or hemp milk work well here too.\nIf you have a fresh vanilla bean, scrape the insides of it into the pot instead of vanilla extract.\nThis will be the best oatmeal you have ever eaten.",
+#       "ingredients": [
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d",
+#         "water, bottled, generic",
+#         "salt, table",
+#         "vanilla extract",
+#         "oats"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "1/2",
+#         "1",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "a82bdd2944",
+#       "query": "vegetarian banana oatmeal breakfast bowl"
+#     },
+#     {
+#       "title": "Oatmeal Banana Muffins - 2 Ww Points",
+#       "calories": 705.2103666667,
+#       "protein_g": 61.072645,
+#       "fat_g": 14.312281,
+#       "carbs_g": 56.2251453333,
+#       "description": "Moist oatmeal muffins with mashed banana and hint of cinnamon; 2 WW points per serving.",
+#       "instructions": "Preheat oven to 400 degrees.\nMix yogurt and oats and set aside.\nAdd dry ingredients (minus sugar) together in another bowl.\nTo the bowl with the yogurt and rolled oats, add egg, applesauce, and then sugar.\nMix welll.\nAdd wet ingredients to the dry ingredients and mix well.\nAdd mashed banana and fold in just to lightly mix.\nBake 20 to 23 minutes.",
+#       "ingredients": [
+#         "oats",
+#         "yogurt, greek, plain, nonfat",
+#         "applesauce, canned, unsweetened, without added ascorbic acid (includes usda commodity)",
+#         "sugars, brown",
+#         "egg substitute, powder",
+#         "wheat flour, white, all-purpose, unenriched",
+#         "salt, table",
+#         "vanilla extract",
+#         "spices, cinnamon, ground",
+#         "leavening agents, baking soda",
+#         "leavening agents, baking powder, double-acting, sodium aluminum sulfate",
+#         "bananas, raw"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "14",
+#         "6",
+#         "14",
+#         "1",
+#         "12",
+#         "12",
+#         "1",
+#         "12",
+#         "1",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "pinch",
+#         "teaspoon",
+#         "teaspoon",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "790eff08ad",
+#       "query": "vegetarian banana oatmeal breakfast bowl"
+#     },
+#     {
+#       "title": "Apple Cider Oatmeal",
+#       "calories": 828.75,
+#       "protein_g": 27.1475,
+#       "fat_g": 22.6775,
+#       "carbs_g": 22.8025,
+#       "description": "Quick, comforting oatmeal cooked in apple cider with cinnamon and butter; easy breakfast.",
+#       "instructions": "In a microwave-safe bowl, combine oats and cider.\nMicrowave, uncovered on high for 1-2 minutes.\nStir in the butter, cinnamon and salt (if using.\nI don't like it with salt but hubby does).\nServe.",
+#       "ingredients": [
+#         "oats",
+#         "apples, raw, with skin",
+#         "butter, without salt",
+#         "spices, cinnamon, ground",
+#         "salt, table"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1 3/4",
+#         "1",
+#         "1",
+#         "18"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "30cee67fca",
+#       "query": "vegetarian apple cinnamon oatmeal breakfast"
+#     },
+#     {
+#       "title": "Alex's Oatmeal",
+#       "calories": 933.2916666667,
+#       "protein_g": 35.625,
+#       "fat_g": 18.51875,
+#       "carbs_g": 23.6279166667,
+#       "description": "Baked oatmeal with walnuts, dried apricots and a hint of cinnamon, served with a drizzle of honey.",
+#       "instructions": "Preheat oven to 350F (180C).\nSpread walnuts and oats on two rimmed cookie sheets.\nBake for 10 to 12 minutes, until they are golden brown.\nBring water to boil in a saucepan over medium heat.\nStir in oats, apricots, cinnamon, and salt.\nReturn to a boil.\nReduce heat, partially cover, simmer until oats are tender, about 25 minutes, stirring occasionally to prevent sticking.\nMeanwhile, chop the cooled walnuts.\nSpoon oatmeal into 4 bowl, sprinkle with walnuts and drizzle with honey.",
+#       "ingredients": [
+#         "nuts, walnuts, english",
+#         "oats",
+#         "water, bottled, generic",
+#         "apricots, dried, sulfured, uncooked",
+#         "spices, cinnamon, ground",
+#         "salt, table",
+#         "honey"
+#       ],
+#       "quantities": [
+#         "1/4",
+#         "1 1/4",
+#         "5",
+#         "1",
+#         "18",
+#         "1/2",
+#         "4"
+#       ],
+#       "units": [
+#         "cup",
+#         "scoop",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "1d1a5f004f",
+#       "query": "vegetarian apple cinnamon oatmeal breakfast"
+#     },
+#     {
+#       "title": "Eggless Pancakes",
+#       "calories": 825.9625,
+#       "protein_g": 87.078375,
+#       "fat_g": 8.1961875,
+#       "carbs_g": 36.658375,
+#       "description": "Eggless pancakes made with wheat flour, milk, yogurt, and spices; quick, easy breakfast or brunch option.",
+#       "instructions": "Lightly mix all ingredients in a fairly large bowl; leave 5-10 minutes to rise.\nIts important only to mix the batter enough to moisten, as overmixing will make the pancakes tough.\nGently fold down; leave again for 5-10 minutes if you have the time, and gently fold down again.\nCook medium to medium-high on an oiled skillet till golden, carefully breaking apart any large lumps with the spatula.\nServe immediately.\nFor Vegan use only the soy milk and the soy yogurt.",
+#       "ingredients": [
+#         "wheat flour, white, all-purpose, unenriched",
+#         "sugars, granulated",
+#         "leavening agents, baking powder, double-acting, sodium aluminum sulfate",
+#         "oil, olive, salad or cooking",
+#         "salt, table",
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d",
+#         "yogurt, greek, plain, nonfat",
+#         "spices, cinnamon, ground"
+#       ],
+#       "quantities": [
+#         "2 1/2",
+#         "2",
+#         "2",
+#         "1",
+#         "1",
+#         "2",
+#         "12",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "teaspoon",
+#         "cup",
+#         "cup",
+#         "dash"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "70d417df11",
+#       "query": "vegetarian chocolate chip pancakes breakfast"
+#     },
+#     {
+#       "title": "Chocolate Myoplex Pancakes",
+#       "calories": 740.5296969697,
+#       "protein_g": 97.798030303,
+#       "fat_g": 18.7790606061,
+#       "carbs_g": 27.233,
+#       "description": "Protein-rich pancakes made with almond milk, egg substitute, and whey protein powder, cooked on a griddle.",
+#       "instructions": "Mix dry ingredients first\nThen add all wet ingredients and mix well.\nHeat a fry pan/griddle and grease LIGHTLY.\nPour small amount of batter (about a 1/4 cup) into pan and spread evenly with a spoon.\nWhen bubbles appear on surface and begin to break, turn over and cook the other side.",
+#       "ingredients": [
+#         "egg substitute, powder",
+#         "beverages, almond milk, unsweetened, shelf stable",
+#         "margarine, regular, 80% fat, composite, stick, without salt",
+#         "wheat flour, white, all-purpose, unenriched",
+#         "sugars, granulated",
+#         "leavening agents, baking powder, double-acting, sodium aluminum sulfate",
+#         "salt, table",
+#         "beverages, protein powder whey based"
+#       ],
+#       "quantities": [
+#         "14",
+#         "1",
+#         "2",
+#         "1",
+#         "1",
+#         "3",
+#         "14",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "scoop"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "9666ba3040",
+#       "query": "vegetarian chocolate chip pancakes breakfast"
+#     },
+#     {
+#       "title": "A Bowl of Gluten-Free Oatmeal",
+#       "calories": 721,
+#       "protein_g": 34.57,
+#       "fat_g": 13.13,
+#       "carbs_g": 13.22,
+#       "description": "Creamy, comforting oatmeal cooked with milk and water, flavored with vanilla and topped with sweetener and fruit; simple, satisfying breakfast.",
+#       "instructions": "Set a saucepan over high heat.\nPour in the milk and water.\nAdd the salt and vanilla extract.\nBring the liquids to a boil.\nWhen the milky water is boiling, pour in the oats.\nStir quite vigorously.\nWhen the water returns to a boil, turn down the heat to low.\nSimmer the oats, stirring every few minutes, until the oats are creamy and plump, the liquid fully absorbed, about 15 minutes.\nTurn off the heat and cover the pan.\nLet the oatmeal sit for five minutes to fully absorb the liquid.\nTop with your favorite sweetener and fruit.\n(This one is maple syrup, peaches, and blackberries.)\nVariations: If you cannot eat dairy, almond milk or hemp milk work well here too.\nIf you have a fresh vanilla bean, scrape the insides of it into the pot instead of vanilla extract.\nThis will be the best oatmeal you have ever eaten.",
+#       "ingredients": [
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d",
+#         "water, bottled, generic",
+#         "salt, table",
+#         "vanilla extract",
+#         "oats"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "1/2",
+#         "1",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "a82bdd2944",
+#       "query": "vegetarian strawberry oatmeal smoothie bowl breakfast"
+#     },
+#     {
+#       "title": "Strawberry Freeze Breakfast",
+#       "calories": 759.2560400000001,
+#       "protein_g": 104.7058398,
+#       "fat_g": 5.325006466666667,
+#       "carbs_g": 57.0407245,
+#       "description": "Frozen strawberry breakfast blend with Greek yogurt and honey; quick, healthy start.",
+#       "instructions": "In blender, combine strawberries, milk, yogurt, breakfast drink mix and honey.\nPut cover on blender, and blend until almost smooth, stopping the blender and stirring as necessary.\nPour into 3 or 4 -- 8-ounce glasses.\nServe immediately.",
+#       "ingredients": [
+#         "strawberries, raw",
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d",
+#         "yogurt, greek, plain, nonfat",
+#         "vanilla extract",
+#         "honey"
+#       ],
+#       "quantities": [
+#         "2",
+#         "1 1/2",
+#         "12",
+#         "2",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "cup",
+#         "ounce",
+#         "tablespoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "8fd3be80c1",
+#       "query": "vegetarian strawberry oatmeal smoothie bowl breakfast"
+#     },
+#     {
+#       "title": "Protein pancakes!",
+#       "calories": 716.9122887251,
+#       "protein_g": 25.6032237401,
+#       "fat_g": 13.7429678045,
+#       "carbs_g": 29.932542045,
+#       "description": "Protein-enriched pancakes made with whey protein powder, peanut butter and milk, cooked on a hot pan; quick, protein-packed breakfast.",
+#       "instructions": "Add all ingredients to a bowl mix well.\nPour one cup on hot pan (med-high) flip, garnish, and serve.",
+#       "ingredients": [
+#         "pancakes, plain, dry mix, complete (includes buttermilk)",
+#         "beverages, protein powder whey based",
+#         "peanut butter, smooth style, without salt",
+#         "vanilla extract",
+#         "spices, cinnamon, ground",
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d",
+#         "water, bottled, generic"
+#       ],
+#       "quantities": [
+#         "2",
+#         "2",
+#         "2",
+#         "1",
+#         "1",
+#         "1/2",
+#         "1 1/3"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "dash",
+#         "pinch",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "b8a96ef9d3",
+#       "query": "vegetarian peanut butter banana pancakes breakfast"
+#     },
+#     {
+#       "title": "Peanut Butter Biscuits",
+#       "calories": 960.5416666667,
+#       "protein_g": 43.73875,
+#       "fat_g": 21.79875,
+#       "carbs_g": 39.1375,
+#       "description": "Flourless peanut butter biscuits made with oat and soy flours, perfect for a gluten-free breakfast or snack.",
+#       "instructions": "Preheat oven to 400.\nIn a mixing bowl, combine oat flour, soy flour and baking powder.\nIn a blender, blend peanut butter and milk.\nPour peanut butter mixture into dry ingredients and mix well.\nTurn dough out onto a lightly floured surface and knead lightly.\nRoll out dough 1/4 inches.\nthick and cut into squares or use a cookie cutter.\nPlace biscuits on baking sheet about 1/2 inches.\napart and bake for 15 minutes, or until lightly browned.\nBiscuits should be refrigerated or frozen.",
+#       "ingredients": [
+#         "wheat flour, white, all-purpose, unenriched",
+#         "wheat flour, white, all-purpose, unenriched",
+#         "leavening agents, baking powder, double-acting, sodium aluminum sulfate",
+#         "peanut butter, smooth style, without salt",
+#         "milk, fluid, 1% fat, without added vitamin a and vitamin d"
+#       ],
+#       "quantities": [
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1 1/4",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "6465cda3e3",
+#       "query": "vegetarian peanut butter banana pancakes breakfast"
+#     },
+#     {
+#       "title": "Diabetic Maple and Ginger Oatmeal",
+#       "calories": 822.1428571429,
+#       "protein_g": 29.23,
+#       "fat_g": 12.2,
+#       "carbs_g": 24.8597619048,
+#       "description": "Simple oatmeal with ground ginger and maple syrup, suitable for diabetic diets.",
+#       "instructions": "Mix the ingredients together.\nSweeten with Splenda if needed.",
+#       "ingredients": [
+#         "oats",
+#         "spices, ginger, ground",
+#         "syrup, maple, canadian"
+#       ],
+#       "quantities": [
+#         "1",
+#         "18",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "teaspoon",
+#         "tablespoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "91b1cb26c6",
+#       "query": "vegetarian maple walnut oatmeal breakfast"
+#     },
+#     {
+#       "title": "Alex's Oatmeal",
+#       "calories": 933.2916666667,
+#       "protein_g": 35.625,
+#       "fat_g": 18.51875,
+#       "carbs_g": 23.6279166667,
+#       "description": "Baked oatmeal with walnuts, dried apricots and a hint of cinnamon, served with a drizzle of honey.",
+#       "instructions": "Preheat oven to 350F (180C).\nSpread walnuts and oats on two rimmed cookie sheets.\nBake for 10 to 12 minutes, until they are golden brown.\nBring water to boil in a saucepan over medium heat.\nStir in oats, apricots, cinnamon, and salt.\nReturn to a boil.\nReduce heat, partially cover, simmer until oats are tender, about 25 minutes, stirring occasionally to prevent sticking.\nMeanwhile, chop the cooled walnuts.\nSpoon oatmeal into 4 bowl, sprinkle with walnuts and drizzle with honey.",
+#       "ingredients": [
+#         "nuts, walnuts, english",
+#         "oats",
+#         "water, bottled, generic",
+#         "apricots, dried, sulfured, uncooked",
+#         "spices, cinnamon, ground",
+#         "salt, table",
+#         "honey"
+#       ],
+#       "quantities": [
+#         "1/4",
+#         "1 1/4",
+#         "5",
+#         "1",
+#         "18",
+#         "1/2",
+#         "4"
+#       ],
+#       "units": [
+#         "cup",
+#         "scoop",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon"
+#       ],
+#       "meal_type": "breakfast",
+#       "recipe_id": "1d1a5f004f",
+#       "query": "vegetarian maple walnut oatmeal breakfast"
+#     },
+#     {
+#       "title": "Curried Lentil Salad",
+#       "calories": 831.1375,
+#       "protein_g": 59.578875,
+#       "fat_g": 3.528875,
+#       "carbs_g": 11.7295,
+#       "description": "Mixed salad of lentils, corn, peas and yogurt in a warm, slightly spicy curry sauce; healthy, easy side or light lunch.",
+#       "instructions": "Place everything together and mix.",
+#       "ingredients": [
+#         "lentils, raw",
+#         "yogurt, greek, plain, nonfat",
+#         "spices, curry powder",
+#         "corn, sweet, white, raw",
+#         "peas, green, frozen, unprepared"
+#       ],
+#       "quantities": [
+#         "4",
+#         "1",
+#         "1",
+#         "2",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "31c2c820fd",
+#       "query": "vegetarian greek salad feta lunch"
+#     },
+#     {
+#       "title": "Chickpea, Pesto & Red Onion Salad",
+#       "calories": 672.325,
+#       "protein_g": 24.251125,
+#       "fat_g": 11.092875,
+#       "carbs_g": 71.251375,
+#       "description": "Chickpeas, red onions, and pesto come together in a simple, herby salad; best served at room temperature.",
+#       "instructions": "Drain and wash chick peas.\nIn a bowl, whisk pesto, olive oil, and lemon juice together.\nAdd chick peas and red onions and toss together.\nBest served at room temperature.",
+#       "ingredients": [
+#         "chickpeas (garbanzo beans, bengal gram), mature seeds, raw",
+#         "sauce, pesto, ready-to-serve, refrigerated",
+#         "oil, olive, salad or cooking",
+#         "lemon juice, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "2",
+#         "3",
+#         "1",
+#         "1",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "c4e1ad006c",
+#       "query": "vegetarian greek salad feta lunch"
+#     },
+#     {
+#       "title": "Quinoa Salad",
+#       "calories": 667.225,
+#       "protein_g": 26.7655,
+#       "fat_g": 8.56175,
+#       "carbs_g": 28.4585,
+#       "description": "Cooked quinoa mixed with a citrus-herb dressing and sweet corn, onions, and peppers; light, refreshing salad.",
+#       "instructions": "Bring water to a boil.\nCook quinoa.\nIn a bowl, combine all the other ingredients.\nWhen quinoa has cooled fold into dressing and vegetables.\nServe at room temperature or cold.",
+#       "ingredients": [
+#         "quinoa, uncooked",
+#         "water, bottled, generic",
+#         "orange juice, raw",
+#         "lime juice, raw",
+#         "vinegar, balsamic",
+#         "salt, table",
+#         "corn, sweet, white, raw",
+#         "onions, spring or scallions (includes tops and bulb), raw",
+#         "peppers, sweet, green, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "1 1/2",
+#         "2 1/2",
+#         "6",
+#         "2",
+#         "1",
+#         "14",
+#         "12",
+#         "12",
+#         "12",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "teaspoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "tablespoon"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "86a1200554",
+#       "query": "vegetarian quinoa avocado salad lunch"
+#     },
+#     {
+#       "title": "Chickpea, Pesto & Red Onion Salad",
+#       "calories": 672.325,
+#       "protein_g": 24.251125,
+#       "fat_g": 11.092875,
+#       "carbs_g": 71.251375,
+#       "description": "Chickpeas, red onions, and pesto come together in a simple, herby salad; best served at room temperature.",
+#       "instructions": "Drain and wash chick peas.\nIn a bowl, whisk pesto, olive oil, and lemon juice together.\nAdd chick peas and red onions and toss together.\nBest served at room temperature.",
+#       "ingredients": [
+#         "chickpeas (garbanzo beans, bengal gram), mature seeds, raw",
+#         "sauce, pesto, ready-to-serve, refrigerated",
+#         "oil, olive, salad or cooking",
+#         "lemon juice, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "2",
+#         "3",
+#         "1",
+#         "1",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "c4e1ad006c",
+#       "query": "vegetarian quinoa avocado salad lunch"
+#     },
+#     {
+#       "title": "Salad Supreme Seasoning",
+#       "calories": 512.7187179668,
+#       "protein_g": 24.4715595529,
+#       "fat_g": 22.5967166198,
+#       "carbs_g": 2.9790624359,
+#       "description": "Customizable salad seasoning blend with sesame seeds, paprika, garlic powder, and parmesan.",
+#       "instructions": "Combine all ingredients and mix well.\nStore in a sealable container in the fridge.",
+#       "ingredients": [
+#         "seeds, sesame seeds, whole, dried",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, poppy seed",
+#         "celery, raw",
+#         "spices, garlic powder",
+#         "spices, pepper, black",
+#         "spices, pepper, red or cayenne",
+#         "cheese, parmesan, hard"
+#       ],
+#       "quantities": [
+#         "1 1/2",
+#         "1",
+#         "34",
+#         "12",
+#         "12",
+#         "14",
+#         "14",
+#         "1",
+#         "2"
+#       ],
+#       "units": [
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "tablespoon"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "f92cc55841",
+#       "query": "vegetarian caprese salad balsamic glaze lunch"
+#     },
+#     {
+#       "title": "Chickpea, Pesto & Red Onion Salad",
+#       "calories": 672.325,
+#       "protein_g": 24.251125,
+#       "fat_g": 11.092875,
+#       "carbs_g": 71.251375,
+#       "description": "Chickpeas, red onions, and pesto come together in a simple, herby salad; best served at room temperature.",
+#       "instructions": "Drain and wash chick peas.\nIn a bowl, whisk pesto, olive oil, and lemon juice together.\nAdd chick peas and red onions and toss together.\nBest served at room temperature.",
+#       "ingredients": [
+#         "chickpeas (garbanzo beans, bengal gram), mature seeds, raw",
+#         "sauce, pesto, ready-to-serve, refrigerated",
+#         "oil, olive, salad or cooking",
+#         "lemon juice, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "2",
+#         "3",
+#         "1",
+#         "1",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "c4e1ad006c",
+#       "query": "vegetarian caprese salad balsamic glaze lunch"
+#     },
+#     {
+#       "title": "Quinoa Salad",
+#       "calories": 667.225,
+#       "protein_g": 26.7655,
+#       "fat_g": 8.56175,
+#       "carbs_g": 28.4585,
+#       "description": "Cooked quinoa mixed with a citrus-herb dressing and sweet corn, onions, and peppers; light, refreshing salad.",
+#       "instructions": "Bring water to a boil.\nCook quinoa.\nIn a bowl, combine all the other ingredients.\nWhen quinoa has cooled fold into dressing and vegetables.\nServe at room temperature or cold.",
+#       "ingredients": [
+#         "quinoa, uncooked",
+#         "water, bottled, generic",
+#         "orange juice, raw",
+#         "lime juice, raw",
+#         "vinegar, balsamic",
+#         "salt, table",
+#         "corn, sweet, white, raw",
+#         "onions, spring or scallions (includes tops and bulb), raw",
+#         "peppers, sweet, green, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "1 1/2",
+#         "2 1/2",
+#         "6",
+#         "2",
+#         "1",
+#         "14",
+#         "12",
+#         "12",
+#         "12",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "teaspoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "tablespoon"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "86a1200554",
+#       "query": "vegetarian kale quinoa salad lunch"
+#     },
+#     {
+#       "title": "Curried Lentil Salad",
+#       "calories": 831.1375,
+#       "protein_g": 59.578875,
+#       "fat_g": 3.528875,
+#       "carbs_g": 11.7295,
+#       "description": "Mixed salad of lentils, corn, peas and yogurt in a warm, slightly spicy curry sauce; healthy, easy side or light lunch.",
+#       "instructions": "Place everything together and mix.",
+#       "ingredients": [
+#         "lentils, raw",
+#         "yogurt, greek, plain, nonfat",
+#         "spices, curry powder",
+#         "corn, sweet, white, raw",
+#         "peas, green, frozen, unprepared"
+#       ],
+#       "quantities": [
+#         "4",
+#         "1",
+#         "1",
+#         "2",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "31c2c820fd",
+#       "query": "vegetarian kale quinoa salad lunch"
+#     },
+#     {
+#       "title": "Chickpea, Pesto & Red Onion Salad",
+#       "calories": 672.325,
+#       "protein_g": 24.251125,
+#       "fat_g": 11.092875,
+#       "carbs_g": 71.251375,
+#       "description": "Chickpeas, red onions, and pesto come together in a simple, herby salad; best served at room temperature.",
+#       "instructions": "Drain and wash chick peas.\nIn a bowl, whisk pesto, olive oil, and lemon juice together.\nAdd chick peas and red onions and toss together.\nBest served at room temperature.",
+#       "ingredients": [
+#         "chickpeas (garbanzo beans, bengal gram), mature seeds, raw",
+#         "sauce, pesto, ready-to-serve, refrigerated",
+#         "oil, olive, salad or cooking",
+#         "lemon juice, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "2",
+#         "3",
+#         "1",
+#         "1",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "c4e1ad006c",
+#       "query": "vegetarian mediterranean chickpea salad lunch"
+#     },
+#     {
+#       "title": "Curried Lentil Salad",
+#       "calories": 831.1375,
+#       "protein_g": 59.578875,
+#       "fat_g": 3.528875,
+#       "carbs_g": 11.7295,
+#       "description": "Mixed salad of lentils, corn, peas and yogurt in a warm, slightly spicy curry sauce; healthy, easy side or light lunch.",
+#       "instructions": "Place everything together and mix.",
+#       "ingredients": [
+#         "lentils, raw",
+#         "yogurt, greek, plain, nonfat",
+#         "spices, curry powder",
+#         "corn, sweet, white, raw",
+#         "peas, green, frozen, unprepared"
+#       ],
+#       "quantities": [
+#         "4",
+#         "1",
+#         "1",
+#         "2",
+#         "2"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "31c2c820fd",
+#       "query": "vegetarian mediterranean chickpea salad lunch"
+#     },
+#     {
+#       "title": "Fresh Corn and Tomato Salad",
+#       "calories": 528.391975,
+#       "protein_g": 25.1718828333,
+#       "fat_g": 11.89679,
+#       "carbs_g": 29.7021348333,
+#       "description": "Cool corn and cherry tomatoes mixed with lemon vinaigrette, red onion, and basil; refreshing summer salad.",
+#       "instructions": "Prepare an ice water bath by filling a large bowl halfway with ice and water; set aside.\nBring a large pot of heavily salted water to a boil over high heat.\nAdd the corn kernels and cook until tender, about 4 minutes.\nDrain and place in the ice water bath until cool, about 4 minutes.\nCombine the lemon juice, salt, and pepper in a large, nonreactive bowl.\nWhile continuously whisking, add the oil in a steady stream until completely incorporated.\nAdd the remaining ingredients and the cooled corn and toss until well coated.\nServe.",
+#       "ingredients": [
+#         "corn, sweet, white, raw",
+#         "lemon juice, raw",
+#         "salt, table",
+#         "spices, pepper, black",
+#         "oil, olive, salad or cooking",
+#         "cherries, sweet, raw",
+#         "fresh red onions, upc: 888670013229",
+#         "spices, basil, dried"
+#       ],
+#       "quantities": [
+#         "5",
+#         "2",
+#         "1 1/2",
+#         "14",
+#         "3",
+#         "10",
+#         "12",
+#         "14"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "tablespoon",
+#         "ounce",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "be36d4b236",
+#       "query": "vegetarian spinach strawberry salad lunch"
+#     },
+#     {
+#       "title": "Crunchy Broccoli Salad",
+#       "calories": 690.9382352941,
+#       "protein_g": 85.5512941176,
+#       "fat_g": 5.5954117647,
+#       "carbs_g": 55.2271764706,
+#       "description": "Raw broccoli, carrots, celery, sunflower seeds, raisins, and cranberries in a creamy yogurt dressing; crunchy, healthy salad.",
+#       "instructions": "Chop broccoli into 1/2-3/4\" pieces.\nFinely dice Celery & Red Onion.\nShred Carrot.\nCombine all dry ingredients in bowl.\nWhisk Yogurt/OJ/Mayo in small bowl pour over dry mixture, toss to coat.",
+#       "ingredients": [
+#         "broccoli, raw",
+#         "fresh red onions, upc: 888670013229",
+#         "carrots, raw",
+#         "celery, raw",
+#         "seeds, sunflower seed kernels, dried",
+#         "raisins, seeded",
+#         "cranberries, dried, sweetened",
+#         "yogurt, greek, plain, nonfat",
+#         "yogurt, greek, plain, nonfat",
+#         "orange juice, raw",
+#         "salad dressing, mayonnaise, regular"
+#       ],
+#       "quantities": [
+#         "4",
+#         "14",
+#         "14",
+#         "14",
+#         "2",
+#         "2",
+#         "2",
+#         "13",
+#         "14",
+#         "2",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "88eba8e160",
+#       "query": "vegetarian spinach strawberry salad lunch"
+#     },
+#     {
+#       "title": "Fresh Corn and Tomato Salad",
+#       "calories": 528.391975,
+#       "protein_g": 25.1718828333,
+#       "fat_g": 11.89679,
+#       "carbs_g": 29.7021348333,
+#       "description": "Cool corn and cherry tomatoes mixed with lemon vinaigrette, red onion, and basil; refreshing summer salad.",
+#       "instructions": "Prepare an ice water bath by filling a large bowl halfway with ice and water; set aside.\nBring a large pot of heavily salted water to a boil over high heat.\nAdd the corn kernels and cook until tender, about 4 minutes.\nDrain and place in the ice water bath until cool, about 4 minutes.\nCombine the lemon juice, salt, and pepper in a large, nonreactive bowl.\nWhile continuously whisking, add the oil in a steady stream until completely incorporated.\nAdd the remaining ingredients and the cooled corn and toss until well coated.\nServe.",
+#       "ingredients": [
+#         "corn, sweet, white, raw",
+#         "lemon juice, raw",
+#         "salt, table",
+#         "spices, pepper, black",
+#         "oil, olive, salad or cooking",
+#         "cherries, sweet, raw",
+#         "fresh red onions, upc: 888670013229",
+#         "spices, basil, dried"
+#       ],
+#       "quantities": [
+#         "5",
+#         "2",
+#         "1 1/2",
+#         "14",
+#         "3",
+#         "10",
+#         "12",
+#         "14"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "tablespoon",
+#         "ounce",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "be36d4b236",
+#       "query": "vegetarian tomato mozzarella salad lunch"
+#     },
+#     {
+#       "title": "Chickpea, Pesto & Red Onion Salad",
+#       "calories": 672.325,
+#       "protein_g": 24.251125,
+#       "fat_g": 11.092875,
+#       "carbs_g": 71.251375,
+#       "description": "Chickpeas, red onions, and pesto come together in a simple, herby salad; best served at room temperature.",
+#       "instructions": "Drain and wash chick peas.\nIn a bowl, whisk pesto, olive oil, and lemon juice together.\nAdd chick peas and red onions and toss together.\nBest served at room temperature.",
+#       "ingredients": [
+#         "chickpeas (garbanzo beans, bengal gram), mature seeds, raw",
+#         "sauce, pesto, ready-to-serve, refrigerated",
+#         "oil, olive, salad or cooking",
+#         "lemon juice, raw",
+#         "fresh red onions, upc: 888670013229"
+#       ],
+#       "quantities": [
+#         "2",
+#         "3",
+#         "1",
+#         "1",
+#         "34"
+#       ],
+#       "units": [
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup"
+#       ],
+#       "meal_type": "lunch",
+#       "recipe_id": "c4e1ad006c",
+#       "query": "vegetarian tomato mozzarella salad lunch"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian chickpea spinach curry dinner"
+#     },
+#     {
+#       "title": "Ppk's Simple Italian Sausages- Vegan/Vegetarian",
+#       "calories": 1244.34375,
+#       "protein_g": 154.10875,
+#       "fat_g": 28.26265625,
+#       "carbs_g": 5.48046875,
+#       "description": "Vegan Italian sausages made with vital wheat gluten, beans, and spices, steamed to perfection; easy, plant-based alternative to traditional sausages.",
+#       "instructions": "Get your tinfoil squares ready.\nIn a large bowl, mash the beans until no whole ones are left.\nThrow all the other ingredients together in the order listed and mix with a fork (I find it easier to use my hands).\nGet your steaming apparatus ready.\nDivide dough into 8 even parts and form into little logs (about the size of a large hot dog.\n).\nTightly wrap the dough in tin foil, like a tootsie roll, twisting the ends.\n(I didn't wrap mine tight enough last time and they came out strangely shaped but they still cooked through and tasted great.\n).\nPlace wrapped sausages in steamer (I use one of those cheap steamer baskets you can buy at the grocery store) and steam for 40 minutes.\nUnwrap and enjoy or refrigerate for later (they also freeze well).",
+#       "ingredients": [
+#         "beans, snap, green, raw",
+#         "soup, vegetable broth, ready to serve",
+#         "oil, olive, salad or cooking",
+#         "soy sauce made from soy (tamari)",
+#         "vital wheat gluten",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, garlic powder",
+#         "spices, fennel seed",
+#         "spices, pepper, red or cayenne",
+#         "spices, paprika",
+#         "spices, oregano, dried",
+#         "spices, thyme, dried",
+#         "spices, pepper, black"
+#       ],
+#       "quantities": [
+#         "12",
+#         "1",
+#         "1",
+#         "2",
+#         "1 1/4",
+#         "14",
+#         "1",
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1",
+#         "12",
+#         "3"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "1d66c87df7",
+#       "query": "vegetarian chickpea spinach curry dinner"
+#     },
+#     {
+#       "title": "Soy Lime Roasted Tofu",
+#       "calories": 932.40967,
+#       "protein_g": 109.6122386,
+#       "fat_g": 16.53537135,
+#       "carbs_g": 30.02768415,
+#       "description": "Tofu marinated in a mixture of soy sauce, lime juice and sesame oil, then roasted until golden brown; easy, flavorful vegan main dish.",
+#       "instructions": "Pat tofu dry and cut into 1/2- to 3/4 inch cubes.\nCombine soy sauce, lime juice and oil in a medium shallow dish or large sealable plastic bag.\nAdd the tofu; gently toss to combine.\nMarinate in the refrigerator for 1 hour or up to 4 hours, gently stirring once or twice.\nPreheat oven to 450F.\nRemove the tofu from the marinade with a slotted spoon (discard marinade).\nSpread out on a large baking sheet, making sure the pieces are not touching.\nRoast, gently turning halfway through, until golden brown, about 20 minutes.",
+#       "ingredients": [
+#         "tofu, raw, regular, prepared with calcium sulfate",
+#         "soy sauce made from soy (tamari)",
+#         "lime juice, raw",
+#         "oil, sesame, salad or cooking"
+#       ],
+#       "quantities": [
+#         "14",
+#         "13",
+#         "13",
+#         "3"
+#       ],
+#       "units": [
+#         "ounce",
+#         "cup",
+#         "cup",
+#         "tablespoon"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "f00ec9f59a",
+#       "query": "vegetarian roasted broccoli tofu stir-fry dinner"
+#     },
+#     {
+#       "title": "Basic Marinated and Baked Tofu",
+#       "calories": 1036.2433066667,
+#       "protein_g": 153.3367445333,
+#       "fat_g": 17.7872325333,
+#       "carbs_g": 29.4174234667,
+#       "description": "Marinated tofu baked in the oven with a savory, slightly sweet sauce; simple, versatile vegan main dish.",
+#       "instructions": "Wrap the tofu in paper towels and press under a heavy skillet for 15 minutes.\nIf it's still pretty wet, replace the towels and press it again.\nMix the soy sauce, vinegar, and oil in a container that is small but big enough for all the tofu.\nCut the tofu in half inch slices and place in marinade.\nTurn it over after about 15 minutes.\nPreheat oven to 350F.\nWipe some of the oil from the marinade on your baking sheet.\nArrange the tofu slices in one layer and bake for 15 minutes.\nTurn them over and bake another 15 minutes.",
+#       "ingredients": [
+#         "tofu, raw, regular, prepared with calcium sulfate",
+#         "soy sauce made from soy (tamari)",
+#         "rice vinegar, upc: 4979435030332",
+#         "oil, sesame, salad or cooking"
+#       ],
+#       "quantities": [
+#         "16",
+#         "14",
+#         "2",
+#         "2"
+#       ],
+#       "units": [
+#         "ounce",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "59b78badd7",
+#       "query": "vegetarian roasted broccoli tofu stir-fry dinner"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian chickpea vegetable tagine dinner"
+#     },
+#     {
+#       "title": "Ppk's Simple Italian Sausages- Vegan/Vegetarian",
+#       "calories": 1244.34375,
+#       "protein_g": 154.10875,
+#       "fat_g": 28.26265625,
+#       "carbs_g": 5.48046875,
+#       "description": "Vegan Italian sausages made with vital wheat gluten, beans, and spices, steamed to perfection; easy, plant-based alternative to traditional sausages.",
+#       "instructions": "Get your tinfoil squares ready.\nIn a large bowl, mash the beans until no whole ones are left.\nThrow all the other ingredients together in the order listed and mix with a fork (I find it easier to use my hands).\nGet your steaming apparatus ready.\nDivide dough into 8 even parts and form into little logs (about the size of a large hot dog.\n).\nTightly wrap the dough in tin foil, like a tootsie roll, twisting the ends.\n(I didn't wrap mine tight enough last time and they came out strangely shaped but they still cooked through and tasted great.\n).\nPlace wrapped sausages in steamer (I use one of those cheap steamer baskets you can buy at the grocery store) and steam for 40 minutes.\nUnwrap and enjoy or refrigerate for later (they also freeze well).",
+#       "ingredients": [
+#         "beans, snap, green, raw",
+#         "soup, vegetable broth, ready to serve",
+#         "oil, olive, salad or cooking",
+#         "soy sauce made from soy (tamari)",
+#         "vital wheat gluten",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, garlic powder",
+#         "spices, fennel seed",
+#         "spices, pepper, red or cayenne",
+#         "spices, paprika",
+#         "spices, oregano, dried",
+#         "spices, thyme, dried",
+#         "spices, pepper, black"
+#       ],
+#       "quantities": [
+#         "12",
+#         "1",
+#         "1",
+#         "2",
+#         "1 1/4",
+#         "14",
+#         "1",
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1",
+#         "12",
+#         "3"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "1d66c87df7",
+#       "query": "vegetarian chickpea vegetable tagine dinner"
+#     },
+#     {
+#       "title": "Ppk's Simple Italian Sausages- Vegan/Vegetarian",
+#       "calories": 1244.34375,
+#       "protein_g": 154.10875,
+#       "fat_g": 28.26265625,
+#       "carbs_g": 5.48046875,
+#       "description": "Vegan Italian sausages made with vital wheat gluten, beans, and spices, steamed to perfection; easy, plant-based alternative to traditional sausages.",
+#       "instructions": "Get your tinfoil squares ready.\nIn a large bowl, mash the beans until no whole ones are left.\nThrow all the other ingredients together in the order listed and mix with a fork (I find it easier to use my hands).\nGet your steaming apparatus ready.\nDivide dough into 8 even parts and form into little logs (about the size of a large hot dog.\n).\nTightly wrap the dough in tin foil, like a tootsie roll, twisting the ends.\n(I didn't wrap mine tight enough last time and they came out strangely shaped but they still cooked through and tasted great.\n).\nPlace wrapped sausages in steamer (I use one of those cheap steamer baskets you can buy at the grocery store) and steam for 40 minutes.\nUnwrap and enjoy or refrigerate for later (they also freeze well).",
+#       "ingredients": [
+#         "beans, snap, green, raw",
+#         "soup, vegetable broth, ready to serve",
+#         "oil, olive, salad or cooking",
+#         "soy sauce made from soy (tamari)",
+#         "vital wheat gluten",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, garlic powder",
+#         "spices, fennel seed",
+#         "spices, pepper, red or cayenne",
+#         "spices, paprika",
+#         "spices, oregano, dried",
+#         "spices, thyme, dried",
+#         "spices, pepper, black"
+#       ],
+#       "quantities": [
+#         "12",
+#         "1",
+#         "1",
+#         "2",
+#         "1 1/4",
+#         "14",
+#         "1",
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1",
+#         "12",
+#         "3"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "1d66c87df7",
+#       "query": "vegetarian broccoli cheese casserole dinner"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian broccoli cheese casserole dinner"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian chickpea sweet potato curry dinner"
+#     },
+#     {
+#       "title": "Ppk's Simple Italian Sausages- Vegan/Vegetarian",
+#       "calories": 1244.34375,
+#       "protein_g": 154.10875,
+#       "fat_g": 28.26265625,
+#       "carbs_g": 5.48046875,
+#       "description": "Vegan Italian sausages made with vital wheat gluten, beans, and spices, steamed to perfection; easy, plant-based alternative to traditional sausages.",
+#       "instructions": "Get your tinfoil squares ready.\nIn a large bowl, mash the beans until no whole ones are left.\nThrow all the other ingredients together in the order listed and mix with a fork (I find it easier to use my hands).\nGet your steaming apparatus ready.\nDivide dough into 8 even parts and form into little logs (about the size of a large hot dog.\n).\nTightly wrap the dough in tin foil, like a tootsie roll, twisting the ends.\n(I didn't wrap mine tight enough last time and they came out strangely shaped but they still cooked through and tasted great.\n).\nPlace wrapped sausages in steamer (I use one of those cheap steamer baskets you can buy at the grocery store) and steam for 40 minutes.\nUnwrap and enjoy or refrigerate for later (they also freeze well).",
+#       "ingredients": [
+#         "beans, snap, green, raw",
+#         "soup, vegetable broth, ready to serve",
+#         "oil, olive, salad or cooking",
+#         "soy sauce made from soy (tamari)",
+#         "vital wheat gluten",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, garlic powder",
+#         "spices, fennel seed",
+#         "spices, pepper, red or cayenne",
+#         "spices, paprika",
+#         "spices, oregano, dried",
+#         "spices, thyme, dried",
+#         "spices, pepper, black"
+#       ],
+#       "quantities": [
+#         "12",
+#         "1",
+#         "1",
+#         "2",
+#         "1 1/4",
+#         "14",
+#         "1",
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1",
+#         "12",
+#         "3"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "1d66c87df7",
+#       "query": "vegetarian chickpea sweet potato curry dinner"
+#     },
+#     {
+#       "title": "Soy Lime Roasted Tofu",
+#       "calories": 932.40967,
+#       "protein_g": 109.6122386,
+#       "fat_g": 16.53537135,
+#       "carbs_g": 30.02768415,
+#       "description": "Tofu marinated in a mixture of soy sauce, lime juice and sesame oil, then roasted until golden brown; easy, flavorful vegan main dish.",
+#       "instructions": "Pat tofu dry and cut into 1/2- to 3/4 inch cubes.\nCombine soy sauce, lime juice and oil in a medium shallow dish or large sealable plastic bag.\nAdd the tofu; gently toss to combine.\nMarinate in the refrigerator for 1 hour or up to 4 hours, gently stirring once or twice.\nPreheat oven to 450F.\nRemove the tofu from the marinade with a slotted spoon (discard marinade).\nSpread out on a large baking sheet, making sure the pieces are not touching.\nRoast, gently turning halfway through, until golden brown, about 20 minutes.",
+#       "ingredients": [
+#         "tofu, raw, regular, prepared with calcium sulfate",
+#         "soy sauce made from soy (tamari)",
+#         "lime juice, raw",
+#         "oil, sesame, salad or cooking"
+#       ],
+#       "quantities": [
+#         "14",
+#         "13",
+#         "13",
+#         "3"
+#       ],
+#       "units": [
+#         "ounce",
+#         "cup",
+#         "cup",
+#         "tablespoon"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "f00ec9f59a",
+#       "query": "vegetarian roasted broccoli cauliflower dinner"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian roasted broccoli cauliflower dinner"
+#     },
+#     {
+#       "title": "Vegan Soy, Lentil, & Veggie Burger Sliders Using Tvp",
+#       "calories": 889.609375,
+#       "protein_g": 46.81171875,
+#       "fat_g": 21.841796875,
+#       "carbs_g": 15.588984375,
+#       "description": "Vegan burgers made with TVP, lentils, and vegetables, bound with flaxseed and baked into crispy patties; versatile and customizable.",
+#       "instructions": "If you're using dry lentils on the stovetop and not the pressure cooker, bring 1/2 cup water to a boil, add the lentils, and lower the heat to medium and let simmer for 20 minutes; drain any excess water when done cooking.\nNuke the vegetable broth for about 2 minutes depending on your microwave's strength.\nYou want it to be near-boiling but not too hot to handle.\nAdd all the dry spices listed with the nutritional yeast under \"Base For The Sliders\" to the heated vegetable broth.\nPour into a large mixing bowl.\nAdd the TVP, making sure it's all covered.\nLet it sit for 10 minutes in order to expand, hydrate, and soak up all the seasonings.\nWhile you wait for that, finely shred the carrot if not using pre-shredded.\nIf not using pre-chopped broccoli like those frozen packages, finely chop up about 1/3 head of a broccoli to get about 1/2 cup of finely chopped broccoli pieces.\nPut the broccoli aside for now.\nHeat up the olive oil in a skillet and sautee the onion, garlic, carrot, and broccoli together until nicely browned, about 5 minutes.\nThe TVP should be all soaked up by now.\nStir it to make sure all the seasoning dispersed.\nAdd the lentils and sauteed veggies.\nMix thoroughly.\nBind with the flax seed.\nFeel free to add some bread crumbs for extra crunch, or more flax if it's not binding well enough.\nThis part was tricky for me because the original mix didn't bind at all.\nI don't recommend using eggs or egg whites to bind because it'll make the mix even more liquidy.\nPreheat the oven to 425F Put a little olive oil on a cookie sheet-- cooking spray just won't work the same for this-- about a teaspoon or a little less, and brush it on evenly with a BBQ/pastry brush or paper towel.\nWhile the oven preheats, let the mixture sit out for about 10 minutes.\nEtract the mixture and put it on the cookie sheet.\nCarefully squish it out evenly, sort of like you're stretching out pizza dough.\nIt should be a large thin rectangle.\nBake for 10-12 minutes or until golden brown on top.\nFlip it over so the other side can cook for another 10-12 minutes.\nUse a pizza cutter to cut into slider squares, you'll get about 16.\nServe on wheat rolls with lettuce, tomato, Vegenaise, Soy Kaas, avocado slices, and/or your other favorite vegetarian \"burger\" fixings!\nIf you want to make these as normal veggie burgers, you'll get 4 big patties and have to bake for about 15 minutes on each side.",
+#       "ingredients": [
+#         "shortening, vegetable, household, composite",
+#         "soup, vegetable broth, ready to serve",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, paprika",
+#         "salt, table",
+#         "spices, marjoram, dried",
+#         "spices, onion powder",
+#         "spices, pepper, black",
+#         "mustard, prepared, yellow",
+#         "spices, pepper, red or cayenne",
+#         "onions, raw",
+#         "spices, garlic powder",
+#         "oil, olive, salad or cooking",
+#         "broccoli, raw",
+#         "carrots, raw",
+#         "lentils, raw",
+#         "seeds, flaxseed"
+#       ],
+#       "quantities": [
+#         "1",
+#         "1",
+#         "2",
+#         "14",
+#         "14",
+#         "14",
+#         "18",
+#         "18",
+#         "18",
+#         "1",
+#         "14",
+#         "12",
+#         "2",
+#         "12",
+#         "12",
+#         "13",
+#         "1"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash",
+#         "cup",
+#         "teaspoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "cup",
+#         "cup"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "266444cabe",
+#       "query": "vegetarian chickpea zucchini stew dinner"
+#     },
+#     {
+#       "title": "Ppk's Simple Italian Sausages- Vegan/Vegetarian",
+#       "calories": 1244.34375,
+#       "protein_g": 154.10875,
+#       "fat_g": 28.26265625,
+#       "carbs_g": 5.48046875,
+#       "description": "Vegan Italian sausages made with vital wheat gluten, beans, and spices, steamed to perfection; easy, plant-based alternative to traditional sausages.",
+#       "instructions": "Get your tinfoil squares ready.\nIn a large bowl, mash the beans until no whole ones are left.\nThrow all the other ingredients together in the order listed and mix with a fork (I find it easier to use my hands).\nGet your steaming apparatus ready.\nDivide dough into 8 even parts and form into little logs (about the size of a large hot dog.\n).\nTightly wrap the dough in tin foil, like a tootsie roll, twisting the ends.\n(I didn't wrap mine tight enough last time and they came out strangely shaped but they still cooked through and tasted great.\n).\nPlace wrapped sausages in steamer (I use one of those cheap steamer baskets you can buy at the grocery store) and steam for 40 minutes.\nUnwrap and enjoy or refrigerate for later (they also freeze well).",
+#       "ingredients": [
+#         "beans, snap, green, raw",
+#         "soup, vegetable broth, ready to serve",
+#         "oil, olive, salad or cooking",
+#         "soy sauce made from soy (tamari)",
+#         "vital wheat gluten",
+#         "leavening agents, yeast, baker's, active dry",
+#         "spices, garlic powder",
+#         "spices, fennel seed",
+#         "spices, pepper, red or cayenne",
+#         "spices, paprika",
+#         "spices, oregano, dried",
+#         "spices, thyme, dried",
+#         "spices, pepper, black"
+#       ],
+#       "quantities": [
+#         "12",
+#         "1",
+#         "1",
+#         "2",
+#         "1 1/4",
+#         "14",
+#         "1",
+#         "1 1/2",
+#         "12",
+#         "1",
+#         "1",
+#         "12",
+#         "3"
+#       ],
+#       "units": [
+#         "cup",
+#         "cup",
+#         "tablespoon",
+#         "tablespoon",
+#         "cup",
+#         "cup",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "teaspoon",
+#         "dash"
+#       ],
+#       "meal_type": "dinner",
+#       "recipe_id": "1d66c87df7",
+#       "query": "vegetarian chickpea zucchini stew dinner"
+#     }
+#   ],
+#   "original_request": {
+#     "target_calories": 2500,
+#     "target_protein": 100,
+#     "target_fat": 60,
+#     "target_carbs": 200,
+#     "breakfast_targets": {
+#       "macro_target_pct": 30,
+#       "macro_tolerance_pct": 10
+#     },
+#     "lunch_targets": {
+#       "macro_target_pct": 30,
+#       "macro_tolerance_pct": 10
+#     },
+#     "dinner_targets": {
+#       "macro_target_pct": 40,
+#       "macro_tolerance_pct": 10
+#     },
+#     "dietary": [
+#       "vegetarian"
+#     ],
+#     "num_days": 7,
+#     "queries_per_meal": 7,
+#     "candidate_recipes": 42,
+#     "preferences": "I want a mix of pancakes and oatmeal for breakfast, some salads for lunch, and hearty dinners with chickpeas or broccoli",
+#     "exclusions": "peanuts, mushrooms"
+#   },
+#   "queries": [
+#     "vegetarian blueberry oatmeal pancakes breakfast",
+#     "vegetarian greek salad feta lunch",
+#     "vegetarian chickpea spinach curry dinner",
+#     "vegetarian banana oatmeal breakfast bowl",
+#     "vegetarian quinoa avocado salad lunch",
+#     "vegetarian roasted broccoli tofu stir-fry dinner",
+#     "vegetarian apple cinnamon oatmeal breakfast",
+#     "vegetarian caprese salad balsamic glaze lunch",
+#     "vegetarian chickpea vegetable tagine dinner",
+#     "vegetarian chocolate chip pancakes breakfast",
+#     "vegetarian kale quinoa salad lunch",
+#     "vegetarian broccoli cheese casserole dinner",
+#     "vegetarian strawberry oatmeal smoothie bowl breakfast",
+#     "vegetarian mediterranean chickpea salad lunch",
+#     "vegetarian chickpea sweet potato curry dinner",
+#     "vegetarian peanut butter banana pancakes breakfast",
+#     "vegetarian spinach strawberry salad lunch",
+#     "vegetarian roasted broccoli cauliflower dinner",
+#     "vegetarian maple walnut oatmeal breakfast",
+#     "vegetarian tomato mozzarella salad lunch",
+#     "vegetarian chickpea zucchini stew dinner"
+#   ],
+#   "meal_counts": {
+#     "breakfast": 14,
+#     "lunch": 14,
+#     "dinner": 14
+#   }
+# }  
 
     
 
