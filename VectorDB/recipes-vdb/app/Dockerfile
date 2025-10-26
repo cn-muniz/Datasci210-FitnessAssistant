@@ -14,6 +14,7 @@ COPY server.py ./server.py
 COPY ingest.py  ./ingest.py
 COPY static     ./static
 COPY llm_planning.py ./llm_planning.py
+COPY llm_judge.py ./llm_judge.py
 
 EXPOSE 8080
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
