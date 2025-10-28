@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "FitPlan Database",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "fitplan_db",
+      "Username": "fitplan_user",
+      "SSLMode": "prefer",
+      "Comment": "FitPlan PostgreSQL Database"
+    }
+  }
+}

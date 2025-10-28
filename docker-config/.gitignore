@@ -1,1 +1,44 @@
+# Database files (SQLite - to be removed after migration)
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables with secrets
 .env
+.env.local
+.env.*.local
+
+# Docker volumes and data directories
+postgres_data/
+pgadmin_data/
+database_data/
+backups/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
