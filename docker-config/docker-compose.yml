@@ -50,14 +50,15 @@ services:
     build:
       context: ..
       dockerfile: ./docker-config/Dockerfile
-    container_name: fitplan-web
+    # container_name: fitplan-web
+    container_name: fitness-app
     image: fitnessapp-web:latest
     environment:
       FLASK_APP: app.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
       DATABASE_URL: postgresql://${POSTGRES_USER:-fitplan_user}:${POSTGRES_PASSWORD:-fitplan_pass}@postgres:5432/${POSTGRES_DB:-fitplan_db}
-      RECIPE_API_BASE: http://api:8080
-      RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
+      # RECIPE_API_BASE: http://api:8080
+      # RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
     ports:
       - "5001:5000"
     volumes:
@@ -76,12 +77,13 @@ services:
     build:
       context: ../VectorDB/recipes-vdb/app
       dockerfile: Dockerfile
-    container_name: fitplan-recipe-api
+    # container_name: fitplan-recipe-api
+    container_name: recipe-search-app
     image: fitnessapp-api:latest
     environment:
       FLASK_APP: server.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
-      QDRANT_URL: ${QDRANT_URL}
+      QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
       QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       COHERE_API_KEY: ${COHERE_API_KEY}

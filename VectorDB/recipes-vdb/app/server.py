@@ -41,9 +41,11 @@ def _get_env_key(env_var: str) -> str:
 
 QDRANT_URL = os.getenv("QDRANT_URL", "https://YOUR-CLOUD-URL:6333")
 QDRANT_API_KEY = _get_env_key("QDRANT_API_KEY")
+logging.info(f"QDRANT_URL: {QDRANT_URL}\nQDRANT_API_KEY: {QDRANT_API_KEY}\n")
 
 COHERE_API_BASE = os.getenv("COHERE_URL", "https://api.cohere.com/v2/chat")
 COHERE_API_KEY = _get_env_key("COHERE_API_KEY")
+logging.info(f"COHERE_API_BASE: {COHERE_API_BASE}\nCOHERE_API_KEY: {COHERE_API_KEY}\n")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
@@ -1060,7 +1062,7 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
                 formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key,query)
                 # logging.info(formatted_recipe)
                 # recipes_list.append(formatted_recipe)
-                recipe_list_key = f"{day_cfg["day"]}"
+                recipe_list_key = f"{day_cfg['day']}"
                 if recipe_list_key not in list(nested_candidates[meal_key].keys()):
                     nested_candidates[meal_key][recipe_list_key] = []
                 nested_candidates[meal_key][recipe_list_key].append(formatted_recipe)
