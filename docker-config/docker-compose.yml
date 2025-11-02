@@ -71,6 +71,8 @@ services:
     restart: unless-stopped
     networks:
       - fitplan-network
+    # Uncomment for production server
+    # entrypoint: ["gunicorn", "app:app", "--bind=0.0.0.0:5000", "--workers=3", "--threads=2", "--timeout=60"]
 
   # Recipe Search API
   api:
