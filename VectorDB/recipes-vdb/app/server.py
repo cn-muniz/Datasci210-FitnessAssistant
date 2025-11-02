@@ -786,6 +786,7 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     #     model="command-a-03-2025",
     #     dietary=payload.dietary
     # )
+    logging.info(f"Received payload for n-day meal plan: {payload}")
     get_candidate_recipes_request = NDayRecipesRequest(
         target_calories=payload.target_calories,
         target_protein=payload.target_protein,
