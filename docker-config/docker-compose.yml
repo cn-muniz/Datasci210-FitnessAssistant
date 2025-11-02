@@ -57,7 +57,8 @@ services:
       FLASK_APP: app.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
       DATABASE_URL: postgresql://${POSTGRES_USER:-fitplan_user}:${POSTGRES_PASSWORD:-fitplan_pass}@postgres:5432/${POSTGRES_DB:-fitplan_db}
-      RECIPE_API_BASE: http://api:8080
+      # RECIPE_API_BASE: http://api:8080
+      RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com
       RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
     ports:
       - "5001:5000"
