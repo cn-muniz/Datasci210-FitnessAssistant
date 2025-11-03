@@ -1,44 +1,125 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:17.6
+    container_name: fitplan-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fitplan_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fitplan_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-fitplan_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d  # Optional: SQL initialization scripts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fitplan_user} -d ${POSTGRES_DB:-fitplan_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - fitplan-network
+
+  # PgAdmin Web Interface
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: fitplan-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@fitplan.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'  # Disable login requirement for local dev
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "8081:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json  # Auto-configure server connection
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fitplan-network
+
+  # Flask Web Application
   web:
     build:
       context: ..
       dockerfile: ./docker-config/Dockerfile
+    # container_name: fitplan-web
     container_name: fitness-app
     image: fitnessapp-web:latest
+    environment:
+      FLASK_APP: app.py
+      FLASK_DEBUG: ${FLASK_DEBUG:-1}
+      # DATABASE_URL: postgresql://${POSTGRES_USER:-fitplan_user}:${POSTGRES_PASSWORD:-fitplan_pass}@postgres:5432/${POSTGRES_DB:-fitplan_db}
+      RECIPE_API_BASE: http://api:8080
+      # RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com
+      RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
+      # DATABASE_SECRET_JSON: >-
+      #   {"username":"fitplan_user",
+      #    "password":"fitplan_pass", 
+      #    "engine":"postgres",
+      #    "host":"macromind-user-db-instance.ci38y4kimjs5.us-east-1.rds.amazonaws.com",
+      #    "port":5432,
+      #    "dbname":"fitplan_db",
+      #    "sslmode":"require"}
     ports:
       - "5001:5000"
-    # Mount the current directory to /app in the container
-    environment:
-      RECIPE_API_BASE: http://api:8080
-      # RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com # we can point to deployed API if needed
-      RECIPE_API_KEY: your-token-if-needed
-      FLASK_APP: app.py
-      FLASK_DEBUG: 1
     volumes:
       - ../fitness_app:/app
-    # command: python app.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - fitplan-network
+    # Uncomment for production server
+    # entrypoint: ["gunicorn", "app:app", "--bind=0.0.0.0:5000", "--workers=3", "--threads=2", "--timeout=60"]
+
+  # Recipe Search API
   api:
     build:
       context: ../VectorDB/recipes-vdb/app
       dockerfile: Dockerfile
+    # container_name: fitplan-recipe-api
     container_name: recipe-search-app
     image: fitnessapp-api:latest
-    ports:
-      - "8080:8080"
     environment:
+      FLASK_APP: server.py
+      FLASK_DEBUG: ${FLASK_DEBUG:-1}
       QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
-      QDRANT_COLLECTION: "recipes"
-      QDRANT_API_KEY: "${QDRANT_API_KEY}"
-      COHERE_API_KEY: "${COHERE_API_KEY}"
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
+      COHERE_API_KEY: ${COHERE_API_KEY}
       COHERE_URL: "https://api.cohere.com/v2/chat"
       EMBED_MODEL: "intfloat/e5-base-v2"
       TFIDF_PATH: "/app_state/tfidf.pkl"
-      FLASK_APP: server.py
-      FLASK_DEBUG: 1
+    ports:
+      - "8080:8080"
     volumes:
-      # - ./app_state:/app_state      # persist tfidf.pkl (for hybrid)
-      # - ./data:/data                # mount your recipes_tagged.jsonl
       - ../VectorDB/recipes-vdb/app:/app
+      - api_state:/app_state
     restart: unless-stopped
+    networks:
+      - fitplan-network
+
+# Named volumes for data persistence
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+  api_state:
+    driver: local
+
+# Custom network for service communication
+networks:
+  fitplan-network:
+    driver: bridge

@@ -2,7 +2,7 @@ name: Build & Push Docker Images to ECR
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "postgres-migration" ]
     # branches: [] # disable for now
     paths:
       - "docker-config/**"
@@ -27,7 +27,7 @@ jobs:
 
     steps:
       # 1) Checkout main repo with the default token (HTTPS)
-      - name: Checkout (main repo only)
+      - name: Checkout (triggered branch)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
