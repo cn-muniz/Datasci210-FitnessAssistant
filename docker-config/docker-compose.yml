@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17.6
     container_name: fitplan-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fitplan_user}
@@ -56,10 +56,18 @@ services:
     environment:
       FLASK_APP: app.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-fitplan_user}:${POSTGRES_PASSWORD:-fitplan_pass}@postgres:5432/${POSTGRES_DB:-fitplan_db}
+      # DATABASE_URL: postgresql://${POSTGRES_USER:-fitplan_user}:${POSTGRES_PASSWORD:-fitplan_pass}@postgres:5432/${POSTGRES_DB:-fitplan_db}
       RECIPE_API_BASE: http://api:8080
       # RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com
       RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
+      # DATABASE_SECRET_JSON: >-
+      #   {"username":"fitplan_user",
+      #    "password":"fitplan_pass", 
+      #    "engine":"postgres",
+      #    "host":"macromind-user-db-instance.ci38y4kimjs5.us-east-1.rds.amazonaws.com",
+      #    "port":5432,
+      #    "dbname":"fitplan_db",
+      #    "sslmode":"require"}
     ports:
       - "5001:5000"
     volumes:
