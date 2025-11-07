@@ -449,6 +449,24 @@ class GenerateMealIdeasResponse(BaseModel):
     plan_meta: Optional[Dict[str, Any]] = None
     days: Optional[List[Dict[str, Any]]] = None
 
+class GenerateShoppingListRequest(BaseModel):
+    meal_descriptions: List[List[str]] = Field(..., description="List of lists of ingredient strings")
+    model: Optional[str] = Field("command-a-03-2025", description="Cohere chat model to use")
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "meal_descriptions": [
+                    ["2 cups all purpose flour", "1.5 cups AP flour", "2 cups plain flour"],
+                    ["3 scallions", "2 green onions", "4 large scallions"]
+                ],
+                "model": "command-a-03-2025"
+            }
+        }
+
+class GenerateShoppingListResponse(BaseModel):
+    shopping_list: List[Dict[str, Any]] = Field(..., description="Consolidated shopping list")
+    notes: Optional[List[str]] = Field(None, description="Optional notes about the shopping list")
+
 # --------------- Helpers -----------------
 
 def embed_query(text: str) -> List[float]:
@@ -921,6 +939,157 @@ def test_chat(payload: TestChatRequest = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
     
+@app.post(
+    "/generate-shopping-list",
+    response_model=GenerateShoppingListResponse,
+    tags=["Chat LLM"],
+    summary="Generate shopping cart using Cohere chat LLM", 
+)
+def generate_shopping_list(payload: GenerateShoppingListRequest = Body(...)):
+    """Generate shopping cart using Cohere chat LLM."""
+    if not COHERE_API_KEY:
+        raise HTTPException(status_code=503, detail={"message": "Cohere API key not configured"})
+    
+    # Ensure ingredients is a list of lists
+    ingredients = payload.meal_descriptions
+    if not isinstance(ingredients[0], list):
+        ingredients = [ingredients]
+
+    user_message = f"""
+You are a precise grocery list consolidator.
+
+TASK
+- Given a week's recipes (list of lists of ingredient strings), produce a single consolidated shopping list.
+- For each ingredient: parse (name, quantity, unit), normalize the name, standardize the unit, convert quantities, aggregate duplicates, ASSIGN A CATEGORY, and **preserve essential qualifiers** so different real items are not merged.
+
+ALLOWED CATEGORIES (choose exactly one per item)
+Fruits, Vegetables, Dairy, Bread and Baked Goods, Meat and Fish, Meat Alternatives,
+Cans and Jars, Pasta, Rice, and Cereals, Sauces and Condiments, Herbs and Spices,
+Frozen Foods, Snacks, Drinks
+
+NAME NORMALIZATION
+- Handle aliases & minor spelling/casing/plural variants.
+- **Strip non-essential descriptors only** (prep/size/state words) from the name.
+- **Preserve essential qualifiers** that distinguish different products (see rules below).
+- Examples of aliases (non-exhaustive; apply sensibly):
+  scallion/scallions/green onions → green onion
+  coriander leaves → cilantro
+  garbanzo beans/chick peas → chickpeas
+  all purpose flour/ap flour/plain flour → all-purpose flour
+  caster sugar/granulated sugar → white sugar
+  powdered sugar/icing sugar → confectioners sugar
+  bicarb soda/bicarbonate of soda → baking soda
+  extra virgin olive oil/EVOO → olive oil
+  minced beef/ground beef → beef (ground)
+  boneless skinless chicken breast → chicken breast
+
+STRIP WORDS (keep core food): fresh, frozen, dried, unsalted, salted, low-sodium, reduced-sodium, organic,
+large, small, medium, finely, chopped, diced, minced, sliced, shredded, grated, thawed, peeled,
+seeded, cored, trimmed, packed, raw, cooked, unsweetened, sweetened
+
+UNIT STANDARDIZATION (use only these):
+- volume → ml
+- mass → g
+- count → ea
+
+CONVERSIONS (imperial → metric; do NOT infer densities):
+Volume: tsp=4.92892 ml, tbsp=14.7868 ml, cup=236.588 ml, fl oz=29.5735 ml, pint=473.176 ml, quart=946.353 ml, liter/litre=1000 ml, ml=1
+Mass: g=1, kg=1000, oz=28.3495 g, lb=453.592 g
+
+COUNTABLE DEFAULTS
+If unit missing AND item is countable (egg, onion, green onion, garlic clove, shallot, lime, tomato, avocado, tortilla, etc.) → use ea.
+Otherwise assume g and do not invent mass; if you cannot convert, keep the original dimension family (no ml↔g guessing).
+
+AMBIGUITY RULES
+- Ranges (e.g., "2–3 cloves") → use the mean (2.5).
+- If package size is unknown (e.g., "1 jar capers"), treat as ea and aggregate by ea.
+- Normalize plural/singular to a singular concept for the name (e.g., "onions" → "onion") but keep quantities correct.
+
+AGGREGATION (with qualifier protection) 
+- Sum quantities for identical (normalized_name, unit) pairs.
+- Do NOT return duplicates.
+- **Do NOT merge** items that differ by the following (non-exhaustive; apply sensibly) **essential qualifiers**:
+  • **Sugars**: keep separate → white sugar (granulated/caster), brown sugar (light/dark), confectioners sugar
+  • **Milk & milk alternatives**: keep separate by type and fat % → whole milk, 2% milk, 1% milk, skim milk, evaporated milk, condensed milk, almond milk, soy milk, oat milk
+  • **Cheese**: keep separate by variety → cheddar, mozzarella, parmesan, feta, goat cheese, cream cheese, ricotta, etc. (ignore state like shredded/sliced/block)
+  • **Flour**: keep separate by type → all-purpose flour, bread flour, cake flour, whole wheat flour, almond flour, etc.
+  • **Rice/Grains**: keep separate by type → white rice, brown rice, basmati, jasmine, quinoa, oats
+  • **Pasta**: shapes can be separate if explicitly specified (spaghetti, penne, macaroni)
+  • **Oils**: keep separate by base → olive oil, canola oil, vegetable oil, avocado oil; (extra-virgin vs light may be merged to "olive oil" unless explicitly required)
+  • **Vinegars**: keep separate → white vinegar, apple cider vinegar, balsamic vinegar, rice vinegar
+  • **Salts**: keep separate → table salt, kosher salt, sea salt (do not merge across)
+  • **Beans/Legumes**: keep separate by species → chickpeas, black beans, kidney beans, lentils
+  • **Butter vs Margarine vs Shortening**: do not merge
+  • **Yogurts**: keep separate by base/type (greek yogurt vs regular; dairy vs plant)
+
+CATEGORIZATION GUIDANCE (non-exhaustive; apply sensibly)
+- Fruits: apple, banana, berries, citrus, avocado, etc.
+- Vegetables: onion, garlic, potato, greens, peppers, tomato (default tomato to Vegetables for store navigation).
+- Dairy: milk, butter, cheese, yogurt, cream.
+- Bread and Baked Goods: bread, buns, tortillas, pitas, pastry.
+- Meat and Fish: beef, pork, chicken, turkey, fish, seafood.
+- Meat Alternatives: tofu, tempeh, seitan, plant-based meats, legumes used as protein.
+- Cans and Jars: canned beans, tomato paste, olives, pickles, capers, jarred sauces.
+- Pasta, Rice, and Cereals: pasta/noodles, rice, quinoa, oats, flour.
+- Sauces and Condiments: oils, vinegars, ketchup, mustard, mayo, soy sauce, hot sauce.
+- Herbs and Spices: cilantro, parsley, basil, dried spices, blends.
+- Frozen Foods: anything explicitly frozen.
+- Snacks: chips, crackers, cookies, bars, nuts-as-snacks.
+- Drinks: water, juice, soda, coffee, tea, milk alternatives as beverages.
+
+    - OUTPUT EXACTLY THIS JSON (no explanation, no markdown):
+
+    {{
+    "shopping_list": [
+        {{
+        "category": "category_name",
+        "name": "ingredient_name",
+        "unit": "unit_name",
+        "quantity": 0.0
+        }}
+    ]
+    }}
+
+    Now, here are the ingredients as JSON:
+    {json.dumps(ingredients, indent=2)}
+    """
+
+    try:
+        message = [{"role": "user", "content": user_message}]
+        resp = _cohere_chat(message, model=payload.model or "command-a-03-2025")
+        
+        # Try to parse the response as JSON
+        try:
+            format_resp = json.loads(resp)
+            if not isinstance(format_resp, dict) or "shopping_list" not in format_resp:
+                raise ValueError("Response missing required shopping_list field")
+                
+            return GenerateShoppingListResponse(
+                shopping_list=format_resp["shopping_list"],
+                notes=format_resp.get("notes")
+            )
+        except json.JSONDecodeError as e:
+            # If JSON parsing fails, log the response for debugging
+            logging.error(f"Failed to parse response as JSON: {resp}")
+            raise HTTPException(
+                status_code=500,
+                detail={"message": f"Failed to parse LLM response as JSON: {str(e)}"}
+            )
+        except ValueError as e:
+            # If response format is invalid, return error
+            logging.error(f"Invalid response format: {resp}")
+            raise HTTPException(
+                status_code=500,
+                detail={"message": f"Invalid response format: {str(e)}"}
+            )
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": f"LLM call failed: {type(e).__name__}: {str(e)}"}
+        )
+
+
 # Meal ideas generation endpoint
 @app.post(
     "/generate-meal-ideas",
