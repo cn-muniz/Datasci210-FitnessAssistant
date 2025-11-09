@@ -42,7 +42,7 @@ Rules
 - meal_tag:
   - breakfast → "breakfast" (always)
   - lunch → one of "salad", "soup", or "main" (only these)
-  - dinner → "main" (always)
+  - dinner → one of "salad", "soup", or "main" (only these)
 - Include a general search string in query for each meal (broad keywords someone could paste into a recipe search—no URLs).
 - Align to user dietary notes and vibe (vegetarian, Mediterranean, high-protein, quick, kid-friendly, etc.).
 - Vary cuisines/ingredients across the week; avoid repeating the same dish name.
@@ -73,6 +73,40 @@ Validation
 
 Return only the JSON object.
 """
+
+# ---------------------------
+# Compact system prompt (try to speed things up)
+# ---------------------------
+SYSTEM_PROMPT_COMPACT = """JSON ONLY. Build an n-day meal plan from a single user brief.
+
+Rules
+- 3 meals/day: breakfast, lunch, dinner.
+- Output keys: meta:{n,notes}, days:[{day,b,l,d}]
+- Meal objects: {q, mt}. q = general search string (no URLs), 3–12 tokens, lowercase; mt = meal_tag.
+- meal_tag (mt): breakfast→"breakfast"; lunch→"salad"|"soup"|"main"; dinner→"salad"|"soup"|"main".
+- Follow diet/exclusions/preferences implied by the brief; keep cuisines/ingredients varied; avoid repeated dish ideas.
+- Keep q short and useful for recipe search (include meal word when natural).
+- If the brief is vague, choose a safe, popular, diverse mix aligned to any stated diet.
+- Focus mostly on main meals for lunch/dinner unless brief suggests otherwise.
+
+Schema
+{
+  "meta": {"n": 7, "notes": "1-sentence paraphrase of brief"},
+  "days": [
+    {"day": 1,
+     "b": {"q": "...", "mt": "breakfast"},
+     "l": {"q": "...", "mt": "salad|soup|main"},
+     "d": {"q": "...", "mt": "salad|soup|main"}
+    }
+  ]
+}
+
+Validate
+- meta.n == number of day objects.
+- q has no URLs/brands; 3–12 tokens.
+- mt values are valid per meal.
+Return only the JSON object."""
+
 
 # ---------------------------
 # Prompt content (ROLE: assistant)
@@ -317,6 +351,100 @@ def build_user_prompt(n: int, user_brief: str) -> str:
         f'user_brief = "{user_brief.strip()}"'
     )
 
+def build_user_prompt_compact(n: int, user_brief: str) -> str:
+    n_clamped = clamp_days(n)
+    # short, machine-friendly, no boilerplate
+    return json.dumps({"n": n_clamped, "brief": user_brief.strip()})
+
+def build_messages_compact(n: int, user_brief: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT_COMPACT},
+        {"role": "user", "content": build_user_prompt_compact(n, user_brief)},
+    ]
+
+def validate_plan_compact(plan: dict, n_expected: int) -> list[str]:
+    errs = []
+    n_expected = clamp_days(n_expected)
+
+    if not isinstance(plan, dict):
+        return ["Top-level must be an object"]
+
+    meta = plan.get("meta")
+    days = plan.get("days")
+    if not isinstance(meta, dict): errs.append('Missing "meta"')
+    if not isinstance(days, list): errs.append('Missing "days"')
+    if errs: return errs
+
+    # meta
+    if not isinstance(meta.get("n"), int): errs.append('"meta.n" must be int')
+    elif meta["n"] != n_expected: errs.append(f'meta.n must equal {n_expected}')
+    if not isinstance(meta.get("notes"), str) or not meta["notes"].strip():
+        errs.append('"meta.notes" required')
+
+    # days
+    if len(days) != n_expected:
+        errs.append(f'"days" must have {n_expected} items (found {len(days)})')
+
+    valid_l = {"salad","soup","main"}
+    for i, day in enumerate(days, 1):
+        if not isinstance(day, dict): errs.append(f"days[{i}] must be object"); continue
+        # Make sure day.get("d") can cast to int
+        try:
+            day_d = int(day.get("day"))
+        except Exception:
+            day_d = None
+        if day_d != i: errs.append(f'days[{i}].day must equal {i}')
+
+        for meal_key, mt_req in (("b","breakfast"), ("l",valid_l), ("d",valid_l)):
+            m = day.get(meal_key)
+            if not isinstance(m, dict):
+                errs.append(f'days[{i}].{meal_key} must be object'); continue
+            q, mt = m.get("q"), m.get("mt")
+            if not isinstance(q, str) or len(q.split()) > 12:
+                errs.append(f'days[{i}].{meal_key}.q must be <=12 words. Found {len(q.split())}')
+            if _contains_url(q or ""):
+                errs.append(f'days[{i}].{meal_key}.q must not contain URLs')
+            if meal_key == "l":
+                if mt not in valid_l: errs.append(f'days[{i}].l.mt invalid: {mt}')
+            elif meal_key == "d":
+                if mt not in valid_l: errs.append(f'days[{i}].d.mt invalid: {mt}')
+            else:
+                if mt != ("breakfast" if meal_key=="b" else "main"):
+                    errs.append(f'days[{i}].{meal_key}.mt invalid: {mt}')
+    return errs
+
+def reformat_plan_compact(plan: dict) -> dict:
+    """Convert compact plan format to full format."""
+    full_plan = {
+        "plan_meta": {
+            "days": plan["meta"]["n"],
+            "notes": plan["meta"]["notes"]
+        },
+        "days": []
+    }
+    for day in plan["days"]:
+        full_day = {
+            "day": day["day"],
+            "breakfast": {
+                "title": "",
+                "meal_tag": "breakfast",
+                "query": day["b"]["q"]
+            },
+            "lunch": {
+                "title": "",
+                "meal_tag": day["l"]["mt"],
+                "query": day["l"]["q"]
+            },
+            "dinner": {
+                "title": "",
+                "meal_tag": day["d"]["mt"],
+                "query": day["d"]["q"]
+            }
+        }
+        full_plan["days"].append(full_day)
+    return full_plan
+
+
 def build_messages(n: int, user_brief: str, include_few_shots: bool = True) -> List[Dict[str, str]]:
     """
     Build a role-based message list for Chat Completions-style APIs.
@@ -535,8 +663,9 @@ def parse_and_validate_output(raw_text: str, n_expected: int) -> Tuple[bool, Opt
     except Exception as e:
         return False, None, [f"Failed to parse JSON from model output: {e}"]
 
-    errors = validate_plan(plan, n_expected)
-    return (len(errors) == 0, plan if not errors else None, errors)
+    # errors = validate_plan(plan, n_expected)
+    errors = validate_plan_compact(plan, n_expected)
+    return (len(errors) == 0, reformat_plan_compact(plan) if not errors else None, errors)
 
 # ---------------------------
 # (Optional) Self-test

@@ -8,20 +8,20 @@ from llm_planning import parse_model_output_to_dict
 
 def generate_system_prompt(daily_cal, daily_protein, daily_fat, daily_carbs, num_days,dietary, preferences, exclusions, candidates, question="Create a balanced 7-day meal plan"):
     prompt = f"""
-You are a meal planner AI assistant. Select 7 days of meals (breakfast, lunch, dinner) close to daily macro goals.
+You are a meal planner AI assistant. Select 7 days of meals (breakfast, lunch, dinner) close to daily macro goals. Ensure a variety of meals throughout the plan. Don't repeat meals more than once within 7 days.
 
 USER PREFERENCES: {preferences}
 EXCLUSIONS: {exclusions}
 DIETARY FLAGS: {dietary}
 DAILY MACRO TARGETS: {{"cal":{daily_cal}, "P": {daily_protein}, "F": {daily_fat}, "C": {daily_carbs}}}
 
-FIELDS: [recipe_id, meal, title, cal, P, F, C, ingredients]
+FIELDS: [recipe_id, meal, title, desc, cal, P, F, C, ingredients]
 
 CANDIDATES: [
   {recipes_to_list(candidates)}
 ]
 
-Please choose {num_days*3} recipes ({num_days} per meal type) balancing macros, variety, and exclusions.
+Please choose {num_days*3} recipes ({num_days} per meal type) balancing macros, variety, and exclusions. Don't use the same recipe id more than twice in 7 days. If the same recipe must be used more than once, don't use it in consecutive days. If insufficient candidates, pick the closest matches.
 return ONLY:
 {{
   "day_1": {{"breakfast": "<recipe_id>", "lunch": "<recipe_id>", "dinner": "<recipe_id>"}},
@@ -43,8 +43,7 @@ def recipes_to_list(candidates):
     candidates = json.loads(candidates)
     recipe_list = []
     for recipe in candidates:
-        # print(recipe)
-        recipe_str = f"[{recipe['recipe_id']}, {recipe['meal_type']}, {recipe['title']}, {recipe['calories']}, {recipe['protein_g']}, {recipe['fat_g']}, {recipe['carbs_g']}, {'. '.join([r for r in recipe['ingredients']])}]"
+        recipe_str = f"""[{recipe['recipe_id']}, {recipe['meal_type']}, "{recipe['title']}", "{recipe['description']}", {recipe['calories']}, {recipe['protein_g']}, {recipe['fat_g']}, {recipe['carbs_g']}, "{'. '.join([r for r in recipe['ingredients']])}"]"""
         recipe_list.append(recipe_str)
     return "\n  ".join(recipe_list)
 

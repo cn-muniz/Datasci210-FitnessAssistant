@@ -339,9 +339,9 @@ class MealMacroTargets(BaseModel):
     macro_target_pct: float = Field(30, gt=0, description="Target macros for an individual meal as a percentage of the target macros.")
     macro_tolerance_pct: float = Field(5, gt=0, description="Individual meal macro tolerance as a percentage. Works in combination with the macro_target_pct. Final macro range is macro_target*(macro_target_pct +/- macro_tolerance_pct)/100.0")
 
-BREAKFAST_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=30.0, macro_tolerance_pct=5.0)
-LUNCH_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=30.0, macro_tolerance_pct=5.0)
-DINNER_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=40.0, macro_tolerance_pct=5.0)
+BREAKFAST_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=25.0, macro_tolerance_pct=10.0)
+LUNCH_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=35.0, macro_tolerance_pct=10.0)
+DINNER_MACRO_DEFAULT = MealMacroTargets(macro_target_pct=40.0, macro_tolerance_pct=10.0)
 
 class NDayRecipesRequest(BaseModel):
     # caloric target, dietary flags, preferences, exclusions
@@ -818,6 +818,9 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     logging.info(f"Fetching candidate recipes with request: {get_candidate_recipes_request}")
 
     nday_recipes_response = get_candidate_recipes(get_candidate_recipes_request)
+    # Print recipe titles and queries used
+    for recipe in nday_recipes_response.candidate_recipes:
+        logging.info(f"Candidate recipe: {recipe.title} (meal_type={recipe.meal_type}, query='{recipe.query}')")
 
     # TODO: consider dropping quantities and units from candidates to free up more tokens
     candidate_recipes_full = nday_recipes_response.candidate_recipes
@@ -1114,17 +1117,14 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
             + "."
         )
     # Use llm_planning module for prompt templates
-    # prompt = llm_planning.build_messages(payload.num_days, payload.user_input, include_few_shots=False)
-    prompt = llm_planning.build_messages(payload.num_days, user_input, include_few_shots=False)
+    # prompt = llm_planning.build_messages(payload.num_days, user_input, include_few_shots=False)
+    prompt = llm_planning.build_messages_compact(payload.num_days, user_input)
     if readable_flags and prompt and prompt[0].get("role") == "system":
         prompt[0]["content"] = (
             f"{prompt[0]['content']}\n\nDietary constraints to enforce: "
             + ", ".join(readable_flags)
             + "."
         )
-    # for item in prompt:
-    #     logging.info(item) # Need to keep this short for Cohere
-    # logging.info(f"Generated prompt: {prompt}")
 
     # Call the LLM
     try:
@@ -1136,22 +1136,20 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
         logging.info(f"LLM call completed in {duration:.2f} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
-    # logging.info(f"LLM response: {resp}")
     # Basic test for now
     # resp = "{\n  \"plan_meta\": {\n    \"days\": 2,\n    \"notes\": \"Mix of pancakes and oatmeal for breakfast, salads for lunch, and hearty chicken or fish dinners.\"\n  },\n  \"days\": [\n    {\n      \"day\": 1,\n      \"breakfast\": {\n        \"title\": \"Blueberry Pancakes\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"fluffy blueberry pancakes breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Grilled Chicken Caesar Salad\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"grilled chicken caesar salad lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Baked Salmon with Roasted Vegetables\",\n        \"meal_tag\": \"main\",\n        \"query\": \"baked salmon roasted vegetables hearty dinner\"\n      }\n    },\n    {\n      \"day\": 2,\n      \"breakfast\": {\n        \"title\": \"Apple Cinnamon Oatmeal\",\n        \"meal_tag\": \"breakfast\",\n        \"query\": \"apple cinnamon oatmeal breakfast\"\n      },\n      \"lunch\": {\n        \"title\": \"Greek Salad with Feta\",\n        \"meal_tag\": \"salad\",\n        \"query\": \"greek salad feta lunch\"\n      },\n      \"dinner\": {\n        \"title\": \"Lemon Herb Roasted Chicken\",\n        \"meal_tag\": \"main\",\n        \"query\": \"lemon herb roasted chicken hearty dinner\"\n      }\n    }\n  ]\n}"
 
     # Validate the LLM response
-    valid,format_resp,errors = llm_planning.parse_and_validate_output(resp, payload.num_days)
+    valid, format_resp, errors = llm_planning.parse_and_validate_output(resp, payload.num_days)
 
     if len(errors) > 0:
         logging.warning(f"LLM response parse/validation errors: {errors}")
     if not valid:
-        raise HTTPException(status_code=500, detail={"message": f"LLM response format invalid: {format_resp}"})
-    # logging.info(f"LLM response parsed OK: {format_resp}")    
+        raise HTTPException(status_code=500, detail={"message": f"LLM response format invalid: {format_resp} with errors: {errors}"})
 
     # return the formatted response
     return GenerateMealIdeasResponse(
-        plan_meta=format_resp.get("plan_meta"),
+        plan_meta=format_resp.get("meta"),
         days=format_resp.get("days"),
     )
 
@@ -1184,7 +1182,8 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
     queries_list: List[str] = []
 
     # Determine the number of recipes to return for each meal
-    recipes_per_meal = int(np.ceil(payload.candidate_recipes/len(meal_config.days)/3.0))+2 # we will trim back down after collecting recipes
+    recipes_per_meal = int(np.ceil(payload.candidate_recipes/len(meal_config.days)/3.0)) # we will trim back down after collecting recipes
+    recipes_limit = 10 # trim back down after collecting recipes
 
     payload_targets = {
         "breakfast": payload.breakfast_targets,
@@ -1201,6 +1200,9 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
         "dinner": {}
     }
 
+    # Keep track of recipe IDs to avoid duplicates - we want unique recipes only
+    recipe_id_list = []
+
     # Get current time to track how long it takes to get all recipe searches
     start_time = time.time()
     meal_keys = list(nested_candidates.keys())
@@ -1209,6 +1211,7 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
             query = day_cfg[meal_key]["query"]
             meal_tag = day_cfg[meal_key]["meal_tag"]
             meal_target = payload_targets[meal_key]
+            # logging.info(f"Searching for recipes for day {day_cfg['day']} meal {meal_key} with query '{query}' and meal_tag '{meal_tag}'")
 
             # Calculate macro targets
             cal_min = payload.target_calories*(meal_target.macro_target_pct-meal_target.macro_tolerance_pct)/100.0
@@ -1222,7 +1225,7 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
 
             request_payload = RecipeSearchRequest(
                 query=query,
-                limit=recipes_per_meal,
+                limit=recipes_limit,
                 meal_tag=meal_tag,
                 cal_min=cal_min,
                 cal_max=cal_max,
@@ -1235,21 +1238,29 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
                 **dietary_kwargs,
             )
 
-            search_response = _core_search(request_payload, force_limit=recipes_per_meal)
+            search_response = _core_search(request_payload, force_limit=recipes_limit)
             # logging.info(f"  Found {search_response.count} results using dense query '{query}'")
+            meal_recipe_count = 0
             for recipe_payload in search_response.results:
+                # logging.info(f"recipe_payload keys: {list(recipe_payload.keys())}")
+                # logging.info(f"    Candidate recipe: {recipe_payload.get('id', 'ERROR')} {recipe_payload.get('title','')} (meal_type={meal_key}, query='{query}')")
                 formatted_recipe = _format_meal_result_llm(recipe_payload,meal_key,query)
-                # logging.info(formatted_recipe)
-                # recipes_list.append(formatted_recipe)
+                if recipe_payload.get("id") not in recipe_id_list:
+                    recipe_id_list.append(recipe_payload.get("id"))
+                    meal_recipe_count += 1
+                else:
+                    continue # skip duplicate recipe
                 recipe_list_key = f"{day_cfg['day']}"
                 if recipe_list_key not in list(nested_candidates[meal_key].keys()):
                     nested_candidates[meal_key][recipe_list_key] = []
                 nested_candidates[meal_key][recipe_list_key].append(formatted_recipe)
+                if meal_recipe_count >= recipes_per_meal:
+                    break
 
             queries_list.append(query)
     end_time = time.time()
     duration = end_time - start_time
-    logging.info(f"All recipe searches completed in {duration:.2f} seconds")
+    logging.info(f"All recipe searches completed in {duration:.2f} seconds. Total unique candidate recipes found: {len(recipe_id_list)}")
     
     # TODO: Add a reranker that takes into account exclusions
 
