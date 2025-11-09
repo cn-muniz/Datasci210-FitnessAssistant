@@ -1,3 +1,4 @@
+import datetime
 import os, time, pickle, threading, json, requests
 from typing import Any, Dict, List, Optional
 
@@ -670,7 +671,7 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         query=query
     )
 
-def _cohere_chat(messages, model="command-a-03-2025"):
+def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False):
     url = COHERE_API_BASE
     # headers = {"Authorization": f"Bearer {COHERE_API_KEY}", "Content-Type": "application/json"}
     headers = {"Authorization": f"Bearer {COHERE_API_KEY}"}
@@ -679,6 +680,8 @@ def _cohere_chat(messages, model="command-a-03-2025"):
         "messages": messages,
         "stream": False
     }
+    if json_enforce:
+        payload['response_format'] = {"type": "json_object"}
     r = requests.post(url, json=payload, headers=headers, timeout=45)
     r.raise_for_status()
     # Cohere v2 chat returns a "message" with "content" parts; join text parts:
@@ -791,19 +794,13 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     """Return a simple four-meal day (breakfast, lunch, dinner, snack) tailored to calorie target + diet flags."""
     _assert_ready()
 
-    # original_target = float(payload.target_calories)
-    # adjusted_target = float(payload.target_calories)
-    # dietary_kwargs = _dietary_kwargs(payload.dietary)
-
     # First generate the n-day plan using the LLM
     if payload.num_days < 1 or payload.num_days > 7:
         raise HTTPException(status_code=400, detail={"message": "num_days must be between 1 and 7"})
-    # generate_meal_ideas_request = GenerateMealIdeasRequest(
-    #     user_input=payload.preferences or "balanced meals",
-    #     num_days=payload.num_days,
-    #     model="command-a-03-2025",
-    #     dietary=payload.dietary
-    # )
+    
+    # Keep track of how long it takes to return the entire n-day plan
+    start_total_time = time.time()
+
     logging.info(f"Received payload for n-day meal plan: {payload}")
     get_candidate_recipes_request = NDayRecipesRequest(
         target_calories=payload.target_calories,
@@ -813,18 +810,14 @@ def n_day(payload: NDayPlanRequest = Body(...)):
         dietary=payload.dietary,
         num_days=payload.num_days,
         queries_per_meal=7, # queries per meal type - hardcoded for now
-        candidate_recipes=42,
+        candidate_recipes=63,
         preferences=payload.preferences,
         exclusions=payload.exclusions
     )
 
+    logging.info(f"Fetching candidate recipes with request: {get_candidate_recipes_request}")
+
     nday_recipes_response = get_candidate_recipes(get_candidate_recipes_request)
-    # nday_recipes_response = NDayRecipesResponse(
-    #     candidate_recipes=TEST_CANDIDATE_RECIPES_RESPONSE["candidate_recipes"],
-    #     original_request=TEST_CANDIDATE_RECIPES_RESPONSE["original_request"],
-    #     queries=TEST_CANDIDATE_RECIPES_RESPONSE["queries"],
-    #     meal_counts=TEST_CANDIDATE_RECIPES_RESPONSE["meal_counts"]
-    # )
 
     # TODO: consider dropping quantities and units from candidates to free up more tokens
     candidate_recipes_full = nday_recipes_response.candidate_recipes
@@ -858,21 +851,26 @@ def n_day(payload: NDayPlanRequest = Body(...)):
         candidates=json.dumps(candidate_recipes_trim)
     )
 
+    # Save prompt to file for debugging
+    with open("llm_judge_prompt.json", "w") as f:
+        f.write(judge_prompt[0]["content"])
+
     # Call the LLM
     try:
-        resp = _cohere_chat(judge_prompt, model="command-a-03-2025")
+        # Get current time to measure how long it takes to get a response
+        # logging.info(f"Calling LLM judge with prompt\n{judge_prompt}")
+        logging.info(f"Calling LLM judge...")
+        start_time = time.time()
+        
+        resp = _cohere_chat(judge_prompt, model="command-a-03-2025",json_enforce=True)
+        end_time = time.time()
+        duration = end_time - start_time
+        logging.info(f"LLM judge call took {duration:.2f} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
-    # logging.info(f"LLM response: {resp}")
+    # logging.info(f"LLM response: \n{resp}")
 
     selected_recipes = llm_judge.extract_meal_plan_json(resp)
-    # # Save selected recipes to a file for debugging
-    # with open("selected_recipes.json", "w") as f:
-    #     json.dump(selected_recipes, f, indent=2)
-    # # Read in the selected recipes from a file for testing
-    # with open("selected_recipes.json", "r") as f:
-    #     selected_recipes = json.load(f)
-
 
     ## Recipe ID mapping
     # Check to see if the recipe_ids are valid
@@ -880,9 +878,11 @@ def n_day(payload: NDayPlanRequest = Body(...)):
 
     daily_plans = []
 
-    for day in selected_recipes.get("days"):
+    # for day in selected_recipes.get("days"):
+    for k,day in selected_recipes.items():
         day_meals = {
-            "day": day.get("day"),
+            # "day": day.get("day"),
+            "day": int(k.strip("day_")),
             "target_calories": payload.target_calories,
             "target_protein": payload.target_protein,
             "target_fat": payload.target_fat,
@@ -893,8 +893,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
             "total_carbs": 0.0,
             "meals": []
         }
-        for meal_key,meal in day.get("meals").items():
-            if meal.get("recipe_id") not in full_recipe_id_list:
+        for meal_key,recipe_id in day.items():
+            if recipe_id not in full_recipe_id_list:
                 # TODO: Add error handling here
                 day_meals.append({
                     "title": "Error",
@@ -906,9 +906,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
                     "units": [],
                     "query": "Error",
                 })
-
             else:
-                recipe_index = full_recipe_id_list.index(meal.get("recipe_id"))
+                recipe_index = full_recipe_id_list.index(recipe_id)
                 full_meal = candidate_recipes_full[recipe_index]
                 # convert to dictionary
                 full_meal = full_meal.dict() if isinstance(full_meal, BaseModel) else full_meal
@@ -920,6 +919,9 @@ def n_day(payload: NDayPlanRequest = Body(...)):
                 day_meals["total_carbs"] += full_meal.get("carbs_g", 0) or 0
 
         daily_plans.append(day_meals)
+    end_total_time = time.time()
+    total_duration = end_total_time - start_total_time
+    logging.info(f"Total n-day meal plan generation took {total_duration:.2f} seconds")
     return NDayPlanResponse(daily_plans=daily_plans)
 
 # LLM test endpoint
@@ -1056,7 +1058,7 @@ CATEGORIZATION GUIDANCE (non-exhaustive; apply sensibly)
 
     try:
         message = [{"role": "user", "content": user_message}]
-        resp = _cohere_chat(message, model=payload.model or "command-a-03-2025")
+        resp = _cohere_chat(message, model=payload.model or "command-a-03-2025", json_enforce=True)
         
         # Try to parse the response as JSON
         try:
@@ -1126,7 +1128,12 @@ def generate_meal_ideas(payload: GenerateMealIdeasRequest = Body(...)):
 
     # Call the LLM
     try:
-        resp = _cohere_chat(prompt, model=payload.model or "command-a-03-2025")
+        # Get current time to track how long it takes to get a response
+        start_time = time.time()
+        resp = _cohere_chat(prompt, model=payload.model or "command-a-03-2025", json_enforce=True)
+        end_time = time.time()
+        duration = end_time - start_time
+        logging.info(f"LLM call completed in {duration:.2f} seconds")
     except Exception as e:
         raise HTTPException(status_code=500, detail={"message": f"LLM call failed: {type(e).__name__}: {e}"})
     # logging.info(f"LLM response: {resp}")
@@ -1194,6 +1201,8 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
         "dinner": {}
     }
 
+    # Get current time to track how long it takes to get all recipe searches
+    start_time = time.time()
     meal_keys = list(nested_candidates.keys())
     for day_cfg in meal_config.days:
         for meal_key in meal_keys:
@@ -1238,6 +1247,9 @@ def get_candidate_recipes(payload: NDayRecipesRequest = Body(...)):
                 nested_candidates[meal_key][recipe_list_key].append(formatted_recipe)
 
             queries_list.append(query)
+    end_time = time.time()
+    duration = end_time - start_time
+    logging.info(f"All recipe searches completed in {duration:.2f} seconds")
     
     # TODO: Add a reranker that takes into account exclusions
 
