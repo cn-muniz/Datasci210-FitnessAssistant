@@ -819,8 +819,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
 
     nday_recipes_response = get_candidate_recipes(get_candidate_recipes_request)
     # Print recipe titles and queries used
-    for recipe in nday_recipes_response.candidate_recipes:
-        logging.info(f"Candidate recipe: {recipe.title} (meal_type={recipe.meal_type}, query='{recipe.query}')")
+    # for recipe in nday_recipes_response.candidate_recipes:
+    #     logging.info(f"Candidate recipe: {recipe.title} (meal_type={recipe.meal_type}, query='{recipe.query}')")
 
     # TODO: consider dropping quantities and units from candidates to free up more tokens
     candidate_recipes_full = nday_recipes_response.candidate_recipes
@@ -855,8 +855,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     )
 
     # Save prompt to file for debugging
-    with open("llm_judge_prompt.json", "w") as f:
-        f.write(judge_prompt[0]["content"])
+    # with open("llm_judge_prompt.json", "w") as f:
+    #     f.write(judge_prompt[0]["content"])
 
     # Call the LLM
     try:
