@@ -24,7 +24,8 @@ import llm_judge
 
 # ---------------- Config ----------------
 
-COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
+# COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
+COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes_v2")
 
 def _get_env_key(env_var: str) -> str:
     raw = os.getenv(env_var, "").strip()
