@@ -22,6 +22,20 @@ logging.basicConfig(level=logging.INFO)
 import llm_planning  # for meal plan prompt templates
 import llm_judge
 
+# Suppress health check access logs while keeping all other requests
+class HealthcheckFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        """
+        uvicorn access logs carry the request line in either record.request_line
+        or the formatted message itself; block entries that mention /status.
+        """
+        request_line = getattr(record, "request_line", "") or ""
+        message = record.getMessage() if record.args else record.msg
+        combined = f"{request_line} {message}"
+        return "/status" not in combined
+
+logging.getLogger("uvicorn.access").addFilter(HealthcheckFilter())
+
 # ---------------- Config ----------------
 
 # COLLECTION = os.getenv("QDRANT_COLLECTION", "recipes")
