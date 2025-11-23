@@ -21,6 +21,11 @@ import logging
 logging.basicConfig(level=logging.INFO)
 import llm_planning  # for meal plan prompt templates
 import llm_judge
+from grocery_consolidation import aggregate_items, create_grocery_prompt, parse_ndjson_response, flatten_ingredients, chunk_list
+
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Suppress health check access logs while keeping all other requests
 class HealthcheckFilter(logging.Filter):
@@ -686,7 +691,7 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         query=query
     )
 
-def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False):
+def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False, timeout=45):
     url = COHERE_API_BASE
     # headers = {"Authorization": f"Bearer {COHERE_API_KEY}", "Content-Type": "application/json"}
     headers = {"Authorization": f"Bearer {COHERE_API_KEY}"}
@@ -697,7 +702,9 @@ def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False):
     }
     if json_enforce:
         payload['response_format'] = {"type": "json_object"}
-    r = requests.post(url, json=payload, headers=headers, timeout=45)
+    # logging.info(f"Sending request to Cohere chat model '{model}' with payload: {payload} to url: {url}")
+    r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    # logging.info(f"Cohere response status: {r.status_code}, content: {r.text}")
     r.raise_for_status()
     # Cohere v2 chat returns a "message" with "content" parts; join text parts:
     parts = r.json()["message"]["content"]
@@ -1083,7 +1090,8 @@ CATEGORIZATION GUIDANCE (non-exhaustive; apply sensibly)
             format_resp = json.loads(resp)
             if not isinstance(format_resp, dict) or "shopping_list" not in format_resp:
                 raise ValueError("Response missing required shopping_list field")
-                
+            
+            print(f"Parsed shopping list response: {format_resp}")
             return GenerateShoppingListResponse(
                 shopping_list=format_resp["shopping_list"],
                 notes=format_resp.get("notes")
@@ -1108,7 +1116,152 @@ CATEGORIZATION GUIDANCE (non-exhaustive; apply sensibly)
             status_code=500,
             detail={"message": f"LLM call failed: {type(e).__name__}: {str(e)}"}
         )
+    
 
+async def _normalize_batch_task(
+    co,
+    batch: list[str],
+    model: str,
+    semaphore: asyncio.Semaphore,
+    executor: ThreadPoolExecutor,
+) -> list[dict]:
+    """
+    One batch task:
+    - builds the prompt
+    - calls Cohere chat in a thread
+    - parses NDJSON into list[dict]
+    """
+    loop = asyncio.get_running_loop()
+
+    async with semaphore:
+        prompt = create_grocery_prompt(batch)
+        # logging.info(f"Calling LLM for batch of size {len(batch)} with prompt:\n{prompt}")
+
+        def _call_cohere_sync() -> list[dict]:
+            # Adjust attribute access based on the Cohere SDK version you use
+            resp = co(
+                [{"role": "user", "content": prompt}],
+                model=model,
+                json_enforce=False,
+                timeout=60,
+            )
+
+            # logging.info(f"LLM response: {resp}")
+
+            return parse_ndjson_response(resp)
+
+        return await loop.run_in_executor(executor, _call_cohere_sync)
+    
+async def build_shopping_list_parallel(
+    co,
+    ingredients_by_meal: list[list[str]],
+    model: str = "command-r",
+    batch_size: int = 80,
+    max_calls_per_second: float = 2.0,
+    max_parallel_workers: int = 4,
+) -> dict:
+    """
+    - co: Cohere client
+    - ingredients_by_meal: list of ingredient lists (one per meal)
+    - model: Cohere model name
+    - batch_size: #ingredient strings per LLM call
+    - max_calls_per_second: rate limit
+    - max_parallel_workers: how many calls we run in parallel (threadpool size)
+
+    Returns:
+      {"shopping_list": [...]}
+    """
+
+    flat_ingredients = flatten_ingredients(ingredients_by_meal)
+    batches = list(chunk_list(flat_ingredients, batch_size))
+    logging.info(f"Total ingredients: {len(flat_ingredients)}, divided into {len(batches)} batches of up to {batch_size} each")
+
+    if not batches:
+        return {"shopping_list": []}
+
+    semaphore = asyncio.Semaphore(max_parallel_workers)
+    executor = ThreadPoolExecutor(max_workers=max_parallel_workers)
+
+    tasks = []
+    interval = 1.0 / max_calls_per_second
+    start_time = time.monotonic()
+
+    # Schedule tasks, respecting the max_calls_per_second
+    for idx, batch in enumerate(batches):
+        # Ensure we don't schedule more than N calls per second
+        target_time = start_time + idx * interval
+        now = time.monotonic()
+        delay = max(0.0, target_time - now)
+        await asyncio.sleep(delay)
+
+        task = asyncio.create_task(
+            _normalize_batch_task(co, batch, model, semaphore, executor)
+        )
+        tasks.append(task)
+
+    # Wait for all batches to complete
+    all_batch_items = await asyncio.gather(*tasks)
+    # logging.info(f"All batch items: {all_batch_items}")
+
+    # Flatten list of lists into one list of item dicts
+    all_items = [item for batch_items in all_batch_items for item in batch_items]
+    # logging.info(all_items)
+
+    # Aggregate using your existing logic
+    shopping_list = aggregate_items(all_items)
+    # logging.info(shopping_list)
+
+    return {"shopping_list": shopping_list}
+
+
+
+@app.post(
+    "/generate-shopping-list-logical",
+    response_model=GenerateShoppingListResponse,
+    tags=["Grocery Generation"],
+    summary="Generate shopping cart using Cohere chat LLM and logical conversions", 
+)
+def generate_shopping_list_logical(payload: GenerateShoppingListRequest = Body(...)):
+    """Generate shopping cart using Cohere chat LLM and logical conversions."""
+    # Time the entire process and log duration
+    start_time = time.time()
+    if not COHERE_API_KEY:
+        raise HTTPException(status_code=503, detail={"message": "Cohere API key not configured"})
+    # logging.info(f"Received payload for logical shopping list generation: {payload}")
+    
+    # Fist use cohere to determine unit families, categories, normalized names, and provide merge keys
+    # Then do the conversions and aggregations locally in code
+    try:
+        shopping_list = asyncio.run(
+            build_shopping_list_parallel(
+                _cohere_chat,
+                payload.meal_descriptions,
+                model=payload.model or "command-a-03-2025",
+                batch_size=20,
+                max_calls_per_second=5.0,
+                max_parallel_workers=10,
+            )
+        )
+
+        # logging.info(f"Received response from LLM: {shopping_list}")
+        logging.info(f"Generated shopping list with {len(shopping_list.get('shopping_list', []))} items")
+        logging.info(f"Started with {sum(len(meal) for meal in payload.meal_descriptions)} ingredients across {len(payload.meal_descriptions)} meals")
+        # print the number of ingredients that were consolidated (difference between input and output counts)
+        logging.info(f"Consolidated {sum(len(meal) for meal in payload.meal_descriptions) - len(shopping_list.get('shopping_list', []))} ingredients into final shopping list")
+
+        end_time = time.time()
+        duration = end_time - start_time
+        logging.info(f"Shopping list generation completed in {duration:.2f} seconds")
+        
+        return GenerateShoppingListResponse(
+            shopping_list=shopping_list.get("shopping_list", []),
+            notes=["Generated using logical normalization and aggregation"]
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": f"LLM call failed: {type(e).__name__}: {str(e)}"}
+        )
 
 # Meal ideas generation endpoint
 @app.post(
