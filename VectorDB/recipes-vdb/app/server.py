@@ -704,6 +704,7 @@ def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False, time
         payload['response_format'] = {"type": "json_object"}
     # logging.info(f"Sending request to Cohere chat model '{model}' with payload: {payload} to url: {url}")
     r = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    # print(items)
     # logging.info(f"Cohere response status: {r.status_code}, content: {r.text}")
     r.raise_for_status()
     # Cohere v2 chat returns a "message" with "content" parts; join text parts:
