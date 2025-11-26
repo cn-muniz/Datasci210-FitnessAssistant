@@ -499,6 +499,7 @@ class MergeIngredients(BaseModel):
     f: str = Field(..., description="Unit family ('mass', 'volume', or 'count')")
     c: str = Field(..., description="Grocery category")
     m: str = Field(..., description="Merge ingredient name")
+    r: Optional[str] = Field(None, description="Optional raw unit text")
     title: Optional[str] = Field(None, description="Optional recipe title this ingredient came from")
     recipe_id: Optional[str] = Field(None, description="Optional recipe ID this ingredient came from")
 
@@ -1309,7 +1310,7 @@ def generate_shopping_list_pre_tagged(payload: GenerateShoppingListPreTaggedRequ
     try:
         # convert MergeIngredient objects to dicts
         payload.merge_ingredients = [dict(mi) for mi in payload.merge_ingredients]
-        shopping_list = aggregate_items(payload.merge_ingredients)
+        shopping_list = aggregate_items(payload.merge_ingredients,True)
         logging.info(f"Generated shopping list with {len(shopping_list)} items from {len(payload.merge_ingredients)} pre-tagged ingredients")
         end_time = time.time()
         duration = end_time - start_time
