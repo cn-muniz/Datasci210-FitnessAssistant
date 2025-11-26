@@ -202,6 +202,8 @@ def aggregate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
           "f": str,   # "volume" | "mass" | "count"
           "c": str,   # category
           "m": str,   # merge_key
+          "recipe_id": str,   # optional recipe ID
+          "title": str,       # optional recipe name
         }
 
     Returns shopping list:
@@ -211,6 +213,8 @@ def aggregate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "name": "...",
             "unit": "ml" | "g" | "ea",
             "quantity": float,
+            "recipe_ids": [str],  # optional list of recipe IDs that use this item
+            "recipe_names": [str], # optional list of recipe names that use this item
           },
           ...
         ]
@@ -219,7 +223,7 @@ def aggregate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # print(items)
 
     # totals keyed by (merge_key, canonical_unit, category)
-    totals: dict[tuple[str, str, str], float] = defaultdict(float)
+    totals: dict[tuple[str, str, str], tuple[float, list, list]] = defaultdict(lambda: (0.0, [], []))
     name_lookup: dict[tuple[str, str, str], str] = {}
     # track which canonical units (i.e., which dimensions) appear per merge_key
     units_by_merge: dict[str, set[str]] = defaultdict(set)
@@ -230,25 +234,35 @@ def aggregate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         unit_family = (item.get("f") or "").lower()
         raw_unit = item.get("u", None)
         merge_key = item.get("m") or item.get("n")
+        normalized_name = item.get("n", "") or merge_key
         category = item.get("c", "Other")
         display_name = item.get("n") or merge_key
+        recipe_id = item.get("recipe_id", None)
+        recipe_name = item.get("title", None)
 
         # your existing canonicalization
         qty_canon, unit_canon = convert_to_canonical(quantity, raw_unit, unit_family)
 
+        merge_key = normalized_name.strip().lower()
         key = (merge_key, unit_canon, category)
         # log when we consolidate items
         if key in totals.keys():
             print(f"Consolidating '{original_name}' into '{display_name}' under key {key}. raw_unit='{quantity} {raw_unit}', unit_family='{unit_family}' -> {qty_canon} {unit_canon}")
-        totals[key] += qty_canon
+
+        totals[key] = (
+            totals[key][0] + qty_canon,
+            totals[key][1] + ([recipe_id] if recipe_id else []) if recipe_id not in totals[key][1] else totals[key][1],
+            totals[key][2] + ([recipe_name] if recipe_name else []) if recipe_name not in totals[key][2] else totals[key][2],
+        )
         if key not in name_lookup:
             name_lookup[key] = display_name
 
         units_by_merge[merge_key].add(unit_canon)
 
     shopping_list: List[Dict[str, Any]] = []
+    print(f"Totals computed: {totals}")
 
-    for (merge_key, unit_canon, category), total_qty in totals.items():
+    for (merge_key, unit_canon, category), (total_qty, recipe_ids, recipe_names) in totals.items():
         base_name = name_lookup[(merge_key, unit_canon, category)]
         canonical_units = units_by_merge[merge_key]
 
@@ -271,6 +285,8 @@ def aggregate_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "name": name,
                 "unit": unit_canon,
                 "quantity": round(float(total_qty), 2),
+                "recipe_ids": list(set(recipe_ids)),
+                "recipe_names": list(set(recipe_names)),
             }
         )
 

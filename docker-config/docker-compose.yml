@@ -60,6 +60,8 @@ services:
       RECIPE_API_BASE: http://api:8080
       # RECIPE_API_BASE: https://cqztaifwfa.us-east-1.awsapprunner.com
       RECIPE_API_KEY: ${RECIPE_API_KEY:-your-token-if-needed}
+      POSTGRES_USER: ${POSTGRES_USER:-fitplan_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fitplan_pass}
       # DATABASE_SECRET_JSON: >-
       #   {"username":"fitplan_user",
       #    "password":"fitplan_pass", 
@@ -95,7 +97,7 @@ services:
       FLASK_APP: server.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
       QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes_v2}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes_v3}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       COHERE_API_KEY: ${COHERE_API_KEY}
       COHERE_URL: "https://api.cohere.com/v2/chat"

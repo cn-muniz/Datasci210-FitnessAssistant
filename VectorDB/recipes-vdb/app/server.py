@@ -286,6 +286,8 @@ class MealSummary(BaseModel):
     units: Optional[List[str]] = None
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
     query: Optional[str] = Field(None, description="The search query used to find this recipe")
+    recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
+    merge_ingredients: Optional[List[dict]] = Field(None, description="Merged list of ingredients")
 
 class MealPlanRequest(BaseModel):
     caloric_target: float = Field(..., gt=0, description="Desired total calories for the day")
@@ -423,6 +425,7 @@ class MealForLlm(BaseModel):
     meal_type: Optional[str] = Field(None, description="Meal slot this recipe fills (breakfast, lunch, etc.)")
     recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
     query: Optional[str] = Field(None, description="Query used in dense search")
+    merge_ingredients: Optional[List[dict]] = Field(None, description="Merged list of ingredients")
 
 class MealCounts(BaseModel):
     breakfast: int = 0
@@ -487,6 +490,31 @@ class GenerateShoppingListRequest(BaseModel):
 class GenerateShoppingListResponse(BaseModel):
     shopping_list: List[Dict[str, Any]] = Field(..., description="Consolidated shopping list")
     notes: Optional[List[str]] = Field(None, description="Optional notes about the shopping list")
+
+class MergeIngredients(BaseModel):
+    o: str = Field(..., description="Original ingredient string")
+    n: str = Field(..., description="Normalized ingredient name")
+    q: float = Field(..., description="Quantity as a float")
+    u: str = Field(..., description="Unit of measure")
+    f: str = Field(..., description="Unit family ('mass', 'volume', or 'count')")
+    c: str = Field(..., description="Grocery category")
+    m: str = Field(..., description="Merge ingredient name")
+    title: Optional[str] = Field(None, description="Optional recipe title this ingredient came from")
+    recipe_id: Optional[str] = Field(None, description="Optional recipe ID this ingredient came from")
+
+class GenerateShoppingListPreTaggedRequest(BaseModel):
+    merge_ingredients: List[MergeIngredients] = Field(..., description="List of pre-tagged ingredients to merge")
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "merge_ingredients": [
+                    {"o": "all purpose flour", "n": "all purpose flour", "q": 2.0, "u": "cups", "f": "volume", "c": "Bread and Baked Goods", "m": "all purpose flour", "title": "Recipe A", "recipe_id": "abc123"},
+                    {"o": "AP flour", "n": "all purpose flour", "q": 1.5, "u": "cups", "f": "volume", "c": "Bread and Baked Goods", "m": "all purpose flour", "title": "Recipe B", "recipe_id": "def456"},
+                    {"o": "scallions", "n": "green onions", "q": 3.0, "u": "count", "f": "count", "c": "Vegetables", "m": "green onions", "title": "Recipe A", "recipe_id": "abc123"},
+                    {"o": "green onions", "n": "green onions", "q": 2.0, "u": "count", "f": "count", "c": "Vegetables", "m": "green onions", "title": "Recipe C", "recipe_id": "ghi789"}
+                ]
+            }
+        }    
 
 # --------------- Helpers -----------------
 
@@ -638,6 +666,7 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
             carbs=f"{int(_macro_val('carbs_g') + 0.5)}g",
             fat=f"{int(_macro_val('fat_g') + 0.5)}g",
         ),
+        merge_ingredients=recipe_payload.get("merge_ingredients", []),
     )
 
 def _format_meal_candidate(recipe_payload: Optional[Dict[str, Any]], meal_type: str, query: str) -> Optional[MealSummary]:
@@ -660,6 +689,7 @@ def _format_meal_candidate(recipe_payload: Optional[Dict[str, Any]], meal_type: 
             carbs=f"{int(recipe_payload.get('carbs_g') + 0.5)}g",
             fat=f"{int(recipe_payload.get('fat_g') + 0.5)}g",
         ),
+        merge_ingredients=recipe_payload.get("merge_ingredients", []),
     )
 
 
@@ -688,7 +718,8 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         units=[u["text"] for u in recipe_payload.get("units")],
         meal_type=meal_type,
         recipe_id=recipe_payload.get("source_id"),
-        query=query
+        query=query,
+        merge_ingredients=recipe_payload.get("merge_ingredients", []),
     )
 
 def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False, timeout=45):
@@ -931,6 +962,7 @@ def n_day(payload: NDayPlanRequest = Body(...)):
                     "quantities": [],
                     "units": [],
                     "query": "Error",
+                    "merge_ingredients": []
                 })
             else:
                 recipe_index = full_recipe_id_list.index(recipe_id)
@@ -1210,11 +1242,9 @@ async def build_shopping_list_parallel(
 
     # Aggregate using your existing logic
     shopping_list = aggregate_items(all_items)
-    # logging.info(shopping_list)
+    # logging.info(f"Aggregated shopping list: {shopping_list}")
 
     return {"shopping_list": shopping_list}
-
-
 
 @app.post(
     "/generate-shopping-list-logical",
@@ -1263,6 +1293,38 @@ def generate_shopping_list_logical(payload: GenerateShoppingListRequest = Body(.
             status_code=500,
             detail={"message": f"LLM call failed: {type(e).__name__}: {str(e)}"}
         )
+
+@app.post(
+    "/generate-shopping-list-pre-tagged",
+    response_model=GenerateShoppingListResponse,
+    tags=["Grocery Generation"],
+    summary="Generate shopping cart using pre-tagged ingredients with logical conversions", 
+)
+def generate_shopping_list_pre_tagged(payload: GenerateShoppingListPreTaggedRequest = Body(...)):
+    """Generate shopping cart using pre-tagged ingredients with logical conversions."""
+    # Time the entire process and log duration
+    start_time = time.time()
+
+    # Make sure that the payload includes "merge_ingredients" field for each ingredient
+    try:
+        # convert MergeIngredient objects to dicts
+        payload.merge_ingredients = [dict(mi) for mi in payload.merge_ingredients]
+        shopping_list = aggregate_items(payload.merge_ingredients)
+        logging.info(f"Generated shopping list with {len(shopping_list)} items from {len(payload.merge_ingredients)} pre-tagged ingredients")
+        end_time = time.time()
+        duration = end_time - start_time
+        logging.info(f"Pre-tagged shopping list generation completed in {duration:.2f} seconds")
+        
+        return GenerateShoppingListResponse(
+            shopping_list=shopping_list,
+            notes=["Generated using pre-tagged ingredients with logical normalization and aggregation"]
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"message": f"Aggregation failed: {type(e).__name__}: {str(e)}"}
+        )
+
 
 # Meal ideas generation endpoint
 @app.post(

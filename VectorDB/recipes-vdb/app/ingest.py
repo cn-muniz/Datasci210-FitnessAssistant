@@ -13,7 +13,8 @@ import numpy as np
 import getpass
 
 # COLLECTION = "recipes"
-COLLECTION = "recipes_v2"
+# COLLECTION = "recipes_v2"
+COLLECTION = "recipes_v3"
 QDRANT_URL = "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
 # QDRANT_API_KEY = getpass.getpass("Qdrant API Key: ")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
