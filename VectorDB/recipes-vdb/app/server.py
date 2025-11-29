@@ -19,6 +19,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 import logging
 logging.basicConfig(level=logging.INFO)
+# Show line number in logs
+logging.getLogger().handlers[0].setFormatter(
+    logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+    )
+)
 import llm_planning  # for meal plan prompt templates
 import llm_judge
 from grocery_consolidation import aggregate_items, create_grocery_prompt, parse_ndjson_response, flatten_ingredients, chunk_list
@@ -288,6 +294,7 @@ class MealSummary(BaseModel):
     query: Optional[str] = Field(None, description="The search query used to find this recipe")
     recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
     merge_ingredients: Optional[List[dict]] = Field(None, description="Merged list of ingredients")
+    data_source: Optional[str] = Field(None, description="Data source this recipe came from")
 
 class MealPlanRequest(BaseModel):
     caloric_target: float = Field(..., gt=0, description="Desired total calories for the day")
@@ -426,6 +433,7 @@ class MealForLlm(BaseModel):
     recipe_id: Optional[str] = Field(None, description="Unique ID from Qdrant vectorDB")
     query: Optional[str] = Field(None, description="Query used in dense search")
     merge_ingredients: Optional[List[dict]] = Field(None, description="Merged list of ingredients")
+    data_source: Optional[str] = Field(None, description="Data source this recipe came from")
 
 class MealCounts(BaseModel):
     breakfast: int = 0
@@ -500,6 +508,8 @@ class MergeIngredients(BaseModel):
     c: str = Field(..., description="Grocery category")
     m: str = Field(..., description="Merge ingredient name")
     r: Optional[str] = Field(None, description="Optional raw unit text")
+    ri: Optional[str] = Field(None, description="Optional raw ingredient text")
+    data_source: Optional[str] = Field(None, description="Optional data source this ingredient came from")
     title: Optional[str] = Field(None, description="Optional recipe title this ingredient came from")
     recipe_id: Optional[str] = Field(None, description="Optional recipe ID this ingredient came from")
 
@@ -667,7 +677,9 @@ def _format_meal_result(recipe_payload: Optional[Dict[str, Any]], meal_type: str
             carbs=f"{int(_macro_val('carbs_g') + 0.5)}g",
             fat=f"{int(_macro_val('fat_g') + 0.5)}g",
         ),
+        recipe_id=recipe_payload.get("id"),
         merge_ingredients=recipe_payload.get("merge_ingredients", []),
+        data_source=recipe_payload.get("data_source", None)
     )
 
 def _format_meal_candidate(recipe_payload: Optional[Dict[str, Any]], meal_type: str, query: str) -> Optional[MealSummary]:
@@ -690,7 +702,9 @@ def _format_meal_candidate(recipe_payload: Optional[Dict[str, Any]], meal_type: 
             carbs=f"{int(recipe_payload.get('carbs_g') + 0.5)}g",
             fat=f"{int(recipe_payload.get('fat_g') + 0.5)}g",
         ),
+        recipe_id=recipe_payload.get("recipe_id", None),
         merge_ingredients=recipe_payload.get("merge_ingredients", []),
+        data_source=recipe_payload.get("data_source", None)
     )
 
 
@@ -705,6 +719,8 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
             return float(val)
         except (TypeError, ValueError):
             return 0.0
+        
+    # logging.info(recipe_payload)
 
     return MealForLlm(
         title=recipe_payload.get("title", ""),
@@ -718,9 +734,10 @@ def _format_meal_result_llm(recipe_payload: Optional[Dict[str, Any]], meal_type:
         quantities=[q["text"] for q in recipe_payload.get("quantities")],
         units=[u["text"] for u in recipe_payload.get("units")],
         meal_type=meal_type,
-        recipe_id=recipe_payload.get("source_id"),
+        recipe_id=recipe_payload.get("id"),
         query=query,
         merge_ingredients=recipe_payload.get("merge_ingredients", []),
+        data_source=recipe_payload.get("data_source", None)
     )
 
 def _cohere_chat(messages, model="command-a-03-2025", json_enforce = False, timeout=45):
@@ -879,6 +896,7 @@ def n_day(payload: NDayPlanRequest = Body(...)):
 
     # TODO: consider dropping quantities and units from candidates to free up more tokens
     candidate_recipes_full = nday_recipes_response.candidate_recipes
+    # logging.info(candidate_recipes_full)
     # make a copy of candidate_recipes_full with only the fields needed for the LLM judge
     candidate_recipes_trim = [
         {
@@ -891,7 +909,8 @@ def n_day(payload: NDayPlanRequest = Body(...)):
             "ingredients": recipe.ingredients,
             "instructions": recipe.instructions,
             "recipe_id": recipe.recipe_id,
-            "meal_type": recipe.meal_type
+            "meal_type": recipe.meal_type,
+            "data_source": recipe.data_source,
         }
         for recipe in candidate_recipes_full
     ]
@@ -963,7 +982,9 @@ def n_day(payload: NDayPlanRequest = Body(...)):
                     "quantities": [],
                     "units": [],
                     "query": "Error",
-                    "merge_ingredients": []
+                    "recipe_id": recipe_id,
+                    "merge_ingredients": [],
+                    "data_source": "Error"
                 })
             else:
                 recipe_index = full_recipe_id_list.index(recipe_id)
@@ -1305,6 +1326,10 @@ def generate_shopping_list_pre_tagged(payload: GenerateShoppingListPreTaggedRequ
     """Generate shopping cart using pre-tagged ingredients with logical conversions."""
     # Time the entire process and log duration
     start_time = time.time()
+
+    # # Write payload to file for debugging
+    # with open("pre_tagged_payload.json", "w") as f:
+    #     f.write(payload.json())
 
     # Make sure that the payload includes "merge_ingredients" field for each ingredient
     try:

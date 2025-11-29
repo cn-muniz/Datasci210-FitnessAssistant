@@ -362,6 +362,15 @@
       return on.map(k => `<span class="chip ok"><span class="dot"></span>${labels[k]}</span>`).join(" ");
     }
 
+    function renderMergeIngredients(list){
+      if(!list || !list.length) return '';
+      const rows = list.map(obj => {
+        const parts = Object.entries(obj || {}).map(([k,v]) => `<span class="kv"><strong>${escapeHtml(k)}:</strong> ${escapeHtml(JSON.stringify(v))}</span>`);
+        return `<div class="meta merged-row">${parts.join(" · ")}</div>`;
+      });
+      return `<div class="merged-block"><div class="meta"><strong>Merged ingredients</strong></div>${rows.join("")}</div>`;
+    }
+
     function renderResults(items){
       if(!items.length){ resultsEl.textContent = 'No results.'; return; }
       for(const p of items){
@@ -385,6 +394,7 @@
           <div class="meta">
             per-serving: ${Math.round(mac.cal||0)} kcal · ${(mac.protein_g||0).toFixed(1)}g protein · ${(mac.carbs_g??0).toFixed(1)}g carbs · ${(mac.fat_g||0).toFixed(1)}g fat · ${sodium}
           </div>
+          ${renderMergeIngredients(p.merge_ingredients)}
           <details>
             <summary>Full payload (JSON)</summary>
             <pre class="payload">${escapeHtml(JSON.stringify(p, null, 2))}</pre>

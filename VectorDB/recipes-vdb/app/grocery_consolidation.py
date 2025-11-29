@@ -229,8 +229,10 @@ def aggregate_items(items: List[Dict[str, Any]], use_hard_unit_family: bool) -> 
           "c": str,   # category
           "m": str,   # merge_key
           "r": str,   # optional raw unit text
+          "ri": str,  # optional raw ingredient text
           "recipe_id": str,   # optional recipe ID
           "title": str,       # optional recipe name
+          "data_source": str, # optional data source
         }
     use_hard_unit_family: if True, use the raw unit text to determine unit family for grouping;
                            if False, use the provided unit family from the LLM.
@@ -253,8 +255,22 @@ def aggregate_items(items: List[Dict[str, Any]], use_hard_unit_family: bool) -> 
     if use_hard_unit_family:
         for item in items:
             if "r" in item.keys():
-                item["r"] = item.get("r", item.get("u", None)).lower().strip() if item.get("r", None) else None
-                raw_unit = item.get("r", None)
+                if item["r"] is None:
+                    raw_unit = item.get("u", None).lower().strip() if item.get("u", None) else None
+                else:
+                    item["r"] = item.get("r", item.get("u", None)).lower().strip() if item.get("r", None) else None
+                    raw_unit = item.get("r", None)
+                if raw_unit in VOLUME_TO_ML.keys():
+                    item["f"] = "volume"
+                elif raw_unit in MASS_TO_G.keys():
+                    item["f"] = "mass"
+                elif raw_unit in COUNT_UNITS_FAMILY:
+                    item["f"] = "count"
+                    # else fall back to llm-provided family
+            else:
+                raw_unit = item.get("u", None).lower().strip() if item.get("u", None) else None
+                if raw_unit:
+                    raw_unit = raw_unit.lower().strip()
                 if raw_unit in VOLUME_TO_ML.keys():
                     item["f"] = "volume"
                 elif raw_unit in MASS_TO_G.keys():
@@ -278,6 +294,8 @@ def aggregate_items(items: List[Dict[str, Any]], use_hard_unit_family: bool) -> 
         original_name = item.get("o", "")
         quantity = float(item.get("q", 0) or 0)
         unit_family = (item.get("f") or "").lower()
+        if not unit_family:
+            unit_family = "count"  # default to count if missing
         # raw_unit = item.get("r", item.get("u", None))
         raw_unit = item.get("r", None) if item.get("r", None) is not None else item.get("u", None)
         merge_key = item.get("m") or item.get("n")
@@ -320,7 +338,20 @@ def aggregate_items(items: List[Dict[str, Any]], use_hard_unit_family: bool) -> 
             orig_str_parts.append(original_name)
         orig_str = " ".join(part for part in orig_str_parts if part).strip()
 
-        recipe_ing_entry = {"recipe": recipe_name, "quantity": quantity, "unit": raw_unit, "ingredient": original_name} if recipe_name else {"recipe": None, "quantity": quantity, "unit": raw_unit, "ingredient": original_name}
+        # If original name starts with a quantity and unit, avoid duplication
+        ingr_display = original_name
+        if original_name.lower().startswith(f"{quantity} {raw_unit or ''}".strip()):
+            ingr_display = original_name.split(" ", 2)[-1].strip()
+
+        recipe_ing_entry = {"recipe": recipe_name, "quantity": quantity, "unit": raw_unit, "ingredient": ingr_display} if recipe_name else {"recipe": None, "quantity": quantity, "unit": raw_unit, "ingredient": ingr_display}
+        # For epicurious recipes, just copy the raw ingredient text if available
+        # print(item.get("data_source"))
+        if item.get("data_source") == "epicurious" and item.get("ri"):
+            # print("Using epicurious raw ingredient")
+            # print(item)
+            recipe_ing_entry["quantity"] = ""
+            recipe_ing_entry["unit"] = ""
+            recipe_ing_entry["ingredient"] = item.get("ri")
 
         totals[key] = (
             totals[key][0] + qty_canon,
