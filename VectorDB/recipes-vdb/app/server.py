@@ -28,6 +28,7 @@ logging.getLogger().handlers[0].setFormatter(
 import llm_planning  # for meal plan prompt templates
 import llm_judge
 from grocery_consolidation import aggregate_items, create_grocery_prompt, parse_ndjson_response, flatten_ingredients, chunk_list
+import meal_plan_evaluation  # for RAGAS evaluation of meal plans
 
 import asyncio
 import time
@@ -1002,6 +1003,37 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     end_total_time = time.time()
     total_duration = end_total_time - start_total_time
     logging.info(f"Total n-day meal plan generation took {total_duration:.2f} seconds")
+    
+    # Evaluate the meal plan using RAGAS
+    try:
+        # Format meal plan for evaluation
+        meal_plan_for_eval = {"days": daily_plans}
+        
+        # Format query for evaluation
+        query_for_eval = {
+            "num_days": payload.num_days,
+            "target_calories": payload.target_calories,
+            "target_protein": payload.target_protein,
+            "target_fat": payload.target_fat,
+            "target_carbs": payload.target_carbs,
+            "exclusions": payload.exclusions or [],
+            "dietary": payload.dietary or [],
+            "preferences": payload.preferences or ""
+        }
+        
+        # Run evaluation
+        eval_results = meal_plan_evaluation.comprehensive_ragas_evaluation(
+            meal_plan=meal_plan_for_eval,
+            query=query_for_eval,
+            candidate_recipes=candidate_recipes_full,
+            llm_output=resp,
+            include_custom_metrics=True
+        )
+        
+        logging.info(f"Meal plan evaluation completed. Overall score: {eval_results.get('overall_score', 0):.3f} (Grade: {eval_results.get('grade', 'N/A')})")
+    except Exception as e:
+        logging.warning(f"Meal plan evaluation failed: {str(e)}. Continuing without evaluation.")
+    
     return NDayPlanResponse(daily_plans=daily_plans)
 
 # LLM test endpoint
