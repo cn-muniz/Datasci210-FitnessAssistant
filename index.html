@@ -257,23 +257,37 @@
 
       <!-- Simplified Architecture -->
       <div class="bg-gray-800 rounded-2xl p-8 mb-12">
-        <div class="grid md:grid-cols-5 gap-4 items-center text-center text-sm">
+        <div class="grid md:grid-cols-7 gap-3 items-center text-center text-sm">
           <div class="bg-gray-700 rounded-lg p-4">
             <div class="text-2xl mb-2">👤</div>
             <p class="text-gray-300">User Input</p>
           </div>
           <div class="text-gray-500 text-2xl hidden md:block">→</div>
-          <div class="bg-violet-900/50 border border-violet-700 rounded-lg p-4">
-            <div class="text-2xl mb-2">🧠</div>
-            <p class="text-violet-400">Flask API</p>
-            <p class="text-gray-500 text-xs mt-1">+ Cohere LLM</p>
+          <div class="bg-gray-700 rounded-lg p-4">
+            <div class="text-2xl mb-2">⚙️</div>
+            <p class="text-gray-300">Flask API</p>
           </div>
           <div class="text-gray-500 text-2xl hidden md:block">→</div>
+          <!-- AI Models - Prominent Center Block -->
+          <div class="bg-gradient-to-br from-violet-600 to-purple-700 rounded-xl p-5 shadow-lg shadow-violet-900/50 border border-violet-400">
+            <div class="text-3xl mb-2">🧠</div>
+            <p class="text-white font-semibold">AI Models</p>
+            <p class="text-violet-200 text-xs mt-1">Cohere LLM</p>
+            <p class="text-violet-200 text-xs">RAG Pipeline</p>
+          </div>
+          <div class="text-gray-500 text-2xl hidden md:block">↔</div>
           <div class="bg-indigo-900/50 border border-indigo-700 rounded-lg p-4">
             <div class="text-2xl mb-2">🔍</div>
-            <p class="text-indigo-400">Qdrant VectorDB</p>
+            <p class="text-indigo-400">Vector DB</p>
             <p class="text-gray-500 text-xs mt-1">13K+ Recipes</p>
           </div>
+        </div>
+        <!-- AI Capabilities Row -->
+        <div class="flex justify-center gap-3 mt-6 flex-wrap">
+          <span class="text-violet-300 text-xs bg-violet-900/50 border border-violet-700 px-3 py-1 rounded-full">Query Generation</span>
+          <span class="text-violet-300 text-xs bg-violet-900/50 border border-violet-700 px-3 py-1 rounded-full">Recipe Retrieval</span>
+          <span class="text-violet-300 text-xs bg-violet-900/50 border border-violet-700 px-3 py-1 rounded-full">Meal Selection</span>
+          <span class="text-violet-300 text-xs bg-violet-900/50 border border-violet-700 px-3 py-1 rounded-full">Macro Optimization</span>
         </div>
         <div class="flex justify-center gap-4 mt-6 pt-6 border-t border-gray-700 flex-wrap">
           <span class="text-gray-400 text-xs bg-gray-700 px-3 py-1 rounded-full">Python</span>
@@ -477,15 +491,10 @@
         <div class="flex gap-6 text-sm">
           <a href="https://github.com/your-repo" class="hover:text-white transition">GitHub</a>
           <a href="#" class="hover:text-white transition">Documentation</a>
-          <a href="mailto:team@macromind.com" class="hover:text-white transition">Contact</a>
+          <a href="/cdn-cgi/l/email-protection#dfabbabeb29fb2bebcadb0b2b6b1bbf1bcb0b2" class="hover:text-white transition">Contact</a>
         </div>
       </div>
       <div class="mt-8 pt-8 border-t border-gray-800 text-center text-sm">
         <p>UC Berkeley School of Information • MIDS Capstone 2025</p>
         <p class="mt-2 text-gray-500">Built with Flask, Cohere, Qdrant, and ❤️</p>
       </div>
-    </div>
-  </footer>
-
-</body>
-</html>
