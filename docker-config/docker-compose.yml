@@ -103,6 +103,7 @@ services:
       COHERE_URL: "https://api.cohere.com/v2/chat"
       EMBED_MODEL: "intfloat/e5-base-v2"
       TFIDF_PATH: "/app_state/tfidf.pkl"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     ports:
       - "8080:8080"
     volumes:
