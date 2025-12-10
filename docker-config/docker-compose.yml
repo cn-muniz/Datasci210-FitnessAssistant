@@ -97,7 +97,7 @@ services:
       FLASK_APP: server.py
       FLASK_DEBUG: ${FLASK_DEBUG:-1}
       QDRANT_URL: "https://306b7c69-29bc-4d55-8c4a-1888c445471c.us-west-1-0.aws.cloud.qdrant.io:6333"
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes_v4}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-recipes_v5}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       COHERE_API_KEY: ${COHERE_API_KEY}
       COHERE_URL: "https://api.cohere.com/v2/chat"
