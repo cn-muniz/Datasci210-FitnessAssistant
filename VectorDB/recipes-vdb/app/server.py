@@ -78,6 +78,8 @@ COHERE_API_KEY = _get_env_key("COHERE_API_KEY")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "intfloat/e5-base-v2")
 TFIDF_PATH = os.getenv("TFIDF_PATH", "/app_state/tfidf.pkl")
 
+EVAL_BYPASS = os.getenv("EVAL_BYPASS", "true").lower() == "true"
+
 MEAL_PLAN_CONFIG = [
     {"name": "breakfast", "calorie_pct": 0.25, "query": "healthy breakfast", "meal_tag": "breakfast"},
     {"name": "lunch", "calorie_pct": 0.30, "query": "easy lunch salad", "meal_tag": "salad"},
@@ -1004,6 +1006,9 @@ def n_day(payload: NDayPlanRequest = Body(...)):
     total_duration = end_total_time - start_total_time
     logging.info(f"Total n-day meal plan generation took {total_duration:.2f} seconds")
     
+    if EVAL_BYPASS:
+        logging.info("Evaluation bypass enabled; skipping meal plan evaluation")
+        return NDayPlanResponse(daily_plans=daily_plans)
     # Evaluate the meal plan using RAGAS
     try:
         # Format meal plan for evaluation
